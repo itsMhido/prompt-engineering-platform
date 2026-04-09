@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Box, Database, TerminalSquare, FlaskConical, Target, 
+import {
+  Box, Database, TerminalSquare, FlaskConical, Target,
   Play, Plus, Settings2, GitCommit, Copy, CheckCircle2,
   AlertTriangle, Clock, Activity, HardDrive, ChevronRight
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { savePromptVersion, loadVersionHistory, runPromptTest } from './mockApi';
 
 // Util for tailwind classes
 function cn(...inputs) {
@@ -26,24 +27,18 @@ const MOCK_EXPERIMENTS = [
   { id: 'e3', promptVersion: 'v1', model: 'gpt-4-turbo', dataset: 'Finance Eval', latency: '380ms', cost: '$0.001', score: 75, date: '2 days ago' },
 ];
 
-const PROMPT_VERSIONS = [
-  { id: 'v3', diff: '+ Added context variable' },
-  { id: 'v2', diff: '~ Tweaked temperature instruction' },
-  { id: 'v1', diff: 'Initial version' },
-];
-
 // ---- COMPONENTS ----
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('prompt-studio');
-  
+
   return (
     <div className="flex h-screen w-full bg-background overflow-hidden text-sm">
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
-      
+
       <div className="flex flex-col flex-1 min-w-0">
         <TopBar />
-        
+
         <main className="flex-1 overflow-hidden relative">
           {activeTab === 'prompt-studio' && <PromptStudio />}
           {activeTab === 'experiments' && <ExperimentsView />}
@@ -90,8 +85,8 @@ function Sidebar({ activeTab, setActiveTab }) {
               onClick={() => setActiveTab(item.id)}
               className={cn(
                 "w-full flex items-center gap-3 px-3 py-2.5 rounded-md transition-all duration-200 group text-left",
-                isActive 
-                  ? "bg-primary/10 text-primary border border-primary/20 shadow-[0_0_15px_rgba(0,240,255,0.05)]" 
+                isActive
+                  ? "bg-primary/10 text-primary border-l-2 border-primary"
                   : "text-text-muted hover:bg-white/5 hover:text-text-main"
               )}
             >
@@ -120,8 +115,8 @@ function TopBar() {
           <span className="text-text-muted">Workspace:</span>
           <span className="font-medium">Acme Corp</span>
         </div>
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 border border-primary/20 border-teal-500/30">
-          <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-primary/10 border border-primary/20">
+          <div className="w-2 h-2 rounded-full bg-primary" />
           <span className="font-mono text-xs text-primary">Active: gpt-4-turbo</span>
         </div>
       </div>
@@ -150,41 +145,84 @@ function PromptStudio() {
   const [isRunning, setIsRunning] = useState(false);
   const [activeVersion, setActiveVersion] = useState('v3');
 
-  // Regex to extract variables formatted as {variable_name}
-  const variableRegex = /\{([\w_]+)\}/g;
-  
-  // Extract variables on user prompt change
+  const [history, setHistory] = useState([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [showSavedBadge, setShowSavedBadge] = useState(false);
+
+  // Sync scroll between textarea and highlight layer
+  const textAreaRef = useRef(null);
+  const highlightRef = useRef(null);
+
+  const handleScroll = () => {
+    if (textAreaRef.current && highlightRef.current) {
+      highlightRef.current.scrollTop = textAreaRef.current.scrollTop;
+      highlightRef.current.scrollLeft = textAreaRef.current.scrollLeft;
+    }
+  };
+
+  useEffect(() => {
+    loadVersionHistory('p1').then(data => {
+      setHistory(data);
+      setIsLoadingHistory(false);
+    });
+  }, []);
+
+  const variableRegex = /\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g;
+
   useEffect(() => {
     const matches = Array.from(userPrompt.matchAll(variableRegex));
-    const newVars = {};
-    matches.forEach(match => {
-      newVars[match[1]] = variables[match[1]] || "";
+    setVariables(prev => {
+      const newVars = {};
+      matches.forEach(match => {
+        newVars[match[1]] = prev[match[1]] || "";
+      });
+      return newVars;
     });
-    setVariables(newVars);
   }, [userPrompt]);
 
-  const handleRun = () => {
+  const handleRun = async () => {
     setIsRunning(true);
-    setTimeout(() => {
-      setOutput({
-        text: '{\n  "diagnosis": "Common Cold",\n  "confidence": 0.85,\n  "recommended_action": "Rest and hydration"\n}',
-        latency: '420ms',
-        tokens: 156,
-        cost: '$0.0014'
-      });
-      setIsRunning(false);
-    }, 1200);
+    const result = await runPromptTest(activeVersion, variables, 'gpt-4-turbo');
+    setOutput({
+      text: result.output,
+      latency: result.latency,
+      tokens: result.tokensUsed.total,
+      cost: result.costEstimate
+    });
+    setIsRunning(false);
+  };
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    await savePromptVersion({ id: 'p1', version: 'v4' });
+    setIsSaving(false);
+    setShowSavedBadge(true);
+    setTimeout(() => setShowSavedBadge(false), 2000);
   };
 
   // Helper to render prompt with highlighted variables
   const renderHighlightedText = (text) => {
-    const parts = text.split(/(\{[\w_]+\})/g);
-    return parts.map((part, i) => {
-      if (part.match(/^\{[\w_]+\}$/)) {
-        return <span key={i} className="text-primary bg-primary/10 px-1 rounded font-mono">{part}</span>;
+    if (!text) return null;
+    let lastIndex = 0;
+    const nodes = [];
+    let match;
+    const regex = /\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g;
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        nodes.push(<span key={`text-${lastIndex}`} className="text-text-main">{text.substring(lastIndex, match.index)}</span>);
       }
-      return <span key={i}>{part}</span>;
-    });
+      nodes.push(
+        <span key={`var-${match.index}`} className="font-mono text-primary bg-primary/20 px-0.5 rounded">
+          {match[0]}
+        </span>
+      );
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < text.length) {
+      nodes.push(<span key={`text-${lastIndex}`} className="text-text-main">{text.substring(lastIndex)}</span>);
+    }
+    return <>{nodes}{text.endsWith('\n') ? <br /> : null}</>;
   };
 
   return (
@@ -193,27 +231,33 @@ function PromptStudio() {
       <div className="w-48 border-r border-border bg-panel/30 flex flex-col pt-4">
         <div className="px-4 mb-4 text-xs font-mono text-text-muted uppercase tracking-wider">History</div>
         <div className="flex-1 overflow-y-auto px-2 space-y-2">
-          {PROMPT_VERSIONS.map(v => (
+          {isLoadingHistory ? (
+            <div className="px-2 space-y-2 animate-pulse">
+              {[1, 2, 3].map(i => (
+                <div key={i} className="h-14 bg-panel rounded-md" />
+              ))}
+            </div>
+          ) : history.map(v => (
             <button
-              key={v.id}
-              onClick={() => setActiveVersion(v.id)}
+              key={v.version}
+              onClick={() => setActiveVersion(v.version)}
               className={cn(
                 "w-full text-left p-3 rounded-md transition-all border",
-                activeVersion === v.id 
-                  ? "bg-primary/5 border-primary/30" 
+                activeVersion === v.version
+                  ? "bg-primary/5 border-primary/30"
                   : "bg-transparent border-transparent hover:bg-white/5"
               )}
             >
               <div className="flex items-center justify-between mb-1">
                 <span className={cn(
-                  "font-mono text-xs px-2 py-0.5 rounded-full border",
-                  activeVersion === v.id 
-                    ? "bg-primary/20 text-primary border-primary shadow-[0_0_10px_rgba(0,240,255,0.2)]" 
+                  "font-mono text-xs px-2 py-0.5 rounded border",
+                  activeVersion === v.version
+                    ? "bg-primary/20 text-primary border-primary/50"
                     : "bg-panel text-text-muted border-border"
-                )}>{v.id}</span>
-                {activeVersion === v.id && <GitCommit size={14} className="text-primary" />}
+                )}>{v.label}</span>
+                {activeVersion === v.version && <GitCommit size={14} className="text-primary" />}
               </div>
-              <div className="text-xs text-text-muted truncate mt-1">{v.diff}</div>
+              <div className="text-xs text-text-muted truncate mt-1">{v.description}</div>
             </button>
           ))}
         </div>
@@ -226,16 +270,26 @@ function PromptStudio() {
             <TerminalSquare size={18} className="text-primary" />
             <span className="font-medium">Editor</span>
           </div>
-          <button className="text-xs flex items-center gap-1 text-text-muted hover:text-text-main transition-colors">
-            <Copy size={14} /> Copy JSON
-          </button>
+          <div className="flex items-center gap-3">
+            {showSavedBadge && (
+              <span className="text-xs text-primary font-medium animate-in fade-in zoom-in duration-200">
+                Saved ✓
+              </span>
+            )}
+            <button onClick={handleSave} disabled={isSaving} className="text-xs flex items-center gap-1 text-text-muted hover:text-text-main transition-colors">
+              <Database size={14} /> {isSaving ? 'Saving...' : 'Save'}
+            </button>
+            <button className="text-xs flex items-center gap-1 text-text-muted hover:text-text-main transition-colors">
+              <Copy size={14} /> Copy JSON
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-6">
           {/* System Prompt container */}
           <div className="space-y-2">
             <label className="text-xs font-mono uppercase tracking-wider text-text-muted flex items-center gap-2">
-              <Settings2 size={12}/> System Prompt
+              <Settings2 size={12} /> System Prompt
             </label>
             <textarea
               className="w-full bg-panel border border-border rounded-md p-3 text-text-main font-sans resize-none focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/50 transition-all min-h-[100px]"
@@ -244,22 +298,26 @@ function PromptStudio() {
             />
           </div>
 
-          {/* User Prompt container */}
           <div className="space-y-2">
             <label className="text-xs font-mono uppercase tracking-wider text-text-muted flex items-center gap-2">
-              <AlertTriangle size={12}/> User Template
+              <AlertTriangle size={12} /> User Template
             </label>
-            <div className="relative group">
-               {/* Syntax highlighted background layer (mocked by overlapping div) for real editor feel */}
-               <div className="absolute inset-0 p-3 pointer-events-none text-transparent whitespace-pre-wrap font-sans break-words border border-transparent">
-                  {renderHighlightedText(userPrompt)}
-               </div>
+            <div className="relative group min-h-[150px] bg-panel border border-border rounded-md focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-primary/50 transition-all overflow-hidden flex flex-col">
+              {/* Syntax highlighted background layer */}
+              <div
+                ref={highlightRef}
+                className="absolute inset-0 p-3 pointer-events-none whitespace-pre-wrap font-sans break-words bg-transparent overflow-y-auto scrollbar-hide text-transparent"
+              >
+                {renderHighlightedText(userPrompt)}
+              </div>
               <textarea
-                className="w-full bg-panel border border-border rounded-md p-3 text-text-main/80 font-sans resize-none focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/50 transition-all min-h-[150px] relative z-10 bg-transparent caret-primary"
+                ref={textAreaRef}
+                onScroll={handleScroll}
+                className="absolute inset-0 w-full h-full p-3 font-sans resize-none focus:outline-none bg-transparent caret-primary scrollbar-hide text-transparent"
+                style={{ color: 'transparent', WebkitTextFillColor: 'transparent' }}
                 value={userPrompt}
                 onChange={(e) => setUserPrompt(e.target.value)}
               />
-              <div className="absolute inset-0 bg-panel -z-10 rounded-md"></div>
             </div>
             <div className="text-xs text-text-muted">Use <span className="font-mono text-primary bg-primary/10 px-1 rounded">{'{variable}'}</span> syntax to interpolate values.</div>
           </div>
@@ -268,16 +326,16 @@ function PromptStudio() {
           {Object.keys(variables).length > 0 && (
             <div className="space-y-3 bg-panel/30 border border-border rounded-md p-4">
               <label className="text-xs font-mono uppercase tracking-wider text-text-muted flex items-center gap-2">
-                <Database size={12}/> Variables
+                <Database size={12} /> Variables
               </label>
               <div className="grid grid-cols-2 gap-4">
                 {Object.keys(variables).map(varName => (
                   <div key={varName}>
                     <label className="block text-xs font-mono mb-1 text-primary">{varName}</label>
-                    <input 
+                    <input
                       type="text"
                       value={variables[varName]}
-                      onChange={(e) => setVariables({...variables, [varName]: e.target.value})}
+                      onChange={(e) => setVariables({ ...variables, [varName]: e.target.value })}
                       className="w-full bg-background border border-border rounded px-3 py-1.5 focus:outline-none focus:border-primary/50 text-sm"
                       placeholder={`Value for ${varName}`}
                     />
@@ -293,17 +351,17 @@ function PromptStudio() {
       <div className="w-[45%] flex flex-col bg-background min-w-0">
         <div className="p-4 border-b border-border flex justify-between items-center bg-panel/50">
           <div className="flex items-center gap-2">
-            <Activity size={18} className="text-teal-400" />
+            <Activity size={18} className="text-primary" />
             <span className="font-medium">Output Preview</span>
           </div>
-          <button 
+          <button
             onMouseEnter={() => setIsHoveringRun(true)}
             onMouseLeave={() => setIsHoveringRun(false)}
             onClick={handleRun}
             disabled={isRunning}
             className={cn(
-              "flex items-center gap-2 px-4 py-1.5 rounded bg-primary text-background font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed",
-              isHoveringRun && !isRunning ? "shadow-[0_0_20px_rgba(0,240,255,0.4)] scale-105" : ""
+              "flex items-center gap-2 px-4 py-1.5 rounded bg-primary text-panel font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed",
+              isHoveringRun && !isRunning ? "scale-105" : ""
             )}
           >
             {isRunning ? (
@@ -326,7 +384,7 @@ function PromptStudio() {
                   <Activity size={12} className="text-primary" /> Tokens: {output.tokens}
                 </div>
                 <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-panel border border-border text-xs font-mono text-text-muted">
-                  Cost: <span className="text-green-400">{output.cost}</span>
+                  Cost: <span className="text-green-500">{output.cost}</span>
                 </div>
               </div>
               <div className="bg-panel border border-border rounded-md p-4 group relative">
@@ -361,9 +419,9 @@ function ExperimentsView() {
           <p className="text-text-muted">Track and compare prompt performance over time.</p>
         </div>
         <div className="flex gap-3">
-          <input 
-            type="text" 
-            placeholder="Filter by model..." 
+          <input
+            type="text"
+            placeholder="Filter by model..."
             className="bg-panel border border-border rounded-md px-3 py-1.5 text-sm focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/50"
           />
         </div>
@@ -387,17 +445,17 @@ function ExperimentsView() {
               {MOCK_EXPERIMENTS.map(exp => (
                 <tr key={exp.id} className="hover:bg-white/[0.02] transition-colors group cursor-pointer">
                   <td className="px-6 py-4">
-                    <span className="font-mono text-xs px-2 py-0.5 rounded-full border bg-primary/10 text-primary border-primary/30 group-hover:shadow-[0_0_8px_rgba(0,240,255,0.2)] transition-shadow">
+                    <span className="font-mono text-xs px-2 py-0.5 rounded border bg-primary/10 text-primary border-primary/30 transition-shadow">
                       {exp.promptVersion}
                     </span>
                   </td>
                   <td className="px-6 py-4">{exp.model}</td>
                   <td className="px-6 py-4">{exp.dataset}</td>
                   <td className="px-6 py-4 font-mono text-xs">{exp.latency}</td>
-                  <td className="px-6 py-4 font-mono text-xs text-green-400/80">{exp.cost}</td>
+                  <td className="px-6 py-4 font-mono text-xs text-green-500/80">{exp.cost}</td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
-                      <div className="w-16 h-1.5 bg-background rounded-full overflow-hidden">
+                      <div className="w-16 h-1.5 bg-background rounded-full overflow-hidden border border-border">
                         <div className="h-full bg-primary" style={{ width: `${exp.score}%` }} />
                       </div>
                       <span className="font-mono text-xs">{exp.score}</span>
@@ -424,7 +482,7 @@ function ModelRegistry() {
           <h2 className="text-2xl font-bold tracking-tight mb-1">Model Registry</h2>
           <p className="text-text-muted">Manage available LLMs and provider configurations.</p>
         </div>
-        <button className="flex items-center gap-2 bg-text-main text-background px-4 py-2 rounded-md font-medium hover:bg-white transition-colors shadow-[0_0_15px_rgba(255,255,255,0.1)]">
+        <button className="flex items-center gap-2 bg-text-main text-panel px-4 py-2 rounded-md font-medium hover:bg-white transition-colors">
           <Plus size={16} /> Add Model
         </button>
       </div>
@@ -446,10 +504,10 @@ function ModelRegistry() {
                 {model.version}
               </span>
             </div>
-            
+
             <div className="flex gap-2">
               <div className="bg-background rounded border border-border px-2.5 py-1 text-xs font-mono text-text-muted flex items-center gap-1.5">
-                <Settings2 size={12}/> T: {model.temp}
+                <Settings2 size={12} /> T: {model.temp}
               </div>
               <div className="bg-background rounded border border-border px-2.5 py-1 text-xs font-mono text-text-muted flex items-center gap-1.5">
                 MAX: {model.tokens}
@@ -491,28 +549,28 @@ function EvalPanel({ version, score, model, isWinner }) {
   return (
     <div className={cn(
       "glass-panel rounded-lg flex flex-col overflow-hidden",
-      isWinner ? "border-primary/40 shadow-[0_0_30px_rgba(0,240,255,0.05)]" : ""
+      isWinner ? "border-primary/40 ring-1 ring-primary/20" : ""
     )}>
       <div className="p-4 border-b border-border bg-background/50 flex justify-between items-center">
         <div className="flex items-center gap-3">
           <span className={cn(
-            "font-mono text-xs px-2 py-0.5 rounded-full border",
-            isWinner 
-              ? "bg-primary/20 text-primary border-primary shadow-[0_0_10px_rgba(0,240,255,0.2)]" 
+            "font-mono text-xs px-2 py-0.5 rounded border",
+            isWinner
+              ? "bg-primary/20 text-primary border-primary/50"
               : "bg-panel text-text-muted border-border"
           )}>{version}</span>
           <span className="text-sm font-medium">{model}</span>
         </div>
-        {isWinner && <div className="text-xs font-bold text-primary flex items-center gap-1"><CheckCircle2 size={14}/> WINNER</div>}
+        {isWinner && <div className="text-xs font-bold text-primary flex items-center gap-1"><CheckCircle2 size={14} /> WINNER</div>}
       </div>
 
       <div className="p-4 space-y-4">
         {/* Output */}
         <div className="space-y-1.5">
-           <label className="text-xs font-mono uppercase text-text-muted">Output</label>
-           <div className="bg-background border border-border rounded p-3 text-sm font-sans whitespace-pre-wrap text-text-main h-40 overflow-y-auto">
-             {"{\n  \"diagnosis\": \"Common Cold\",\n  \"confidence\": 0.85,\n  \"recommended_action\": \"Rest and hydration\"\n}"}
-           </div>
+          <label className="text-xs font-mono uppercase text-text-muted">Output</label>
+          <div className="bg-background border border-border rounded p-3 text-sm font-sans whitespace-pre-wrap text-text-main h-40 overflow-y-auto">
+            {"{\n  \"diagnosis\": \"Common Cold\",\n  \"confidence\": 0.85,\n  \"recommended_action\": \"Rest and hydration\"\n}"}
+          </div>
         </div>
 
         {/* Metrics */}

@@ -7,22 +7,22 @@ export default {
   theme: {
     extend: {
       colors: {
-        background: '#0a0a0f',
-        panel: '#12121a',
-        border: '#2a2a35',
+        background: '#0f0e0d',
+        panel: '#1a1916',
+        border: '#252320',
         primary: {
-          DEFAULT: '#00f0ff', // electric teal
-          dark: '#00d5e6',
-          hover: 'rgba(0, 240, 255, 0.1)',
+          DEFAULT: '#88d273ff', // warm amber/gold
+          dark: '#588a4bff',
+          hover: 'rgba(232, 168, 71, 0.1)',
         },
         text: {
-          main: '#e2e8f0',
-          muted: '#94a3b8',
+          main: '#f0ece4',
+          muted: '#8a8478',
         }
       },
       fontFamily: {
-        sans: ['DM Sans', 'sans-serif'],
-        mono: ['JetBrains Mono', 'monospace'],
+        sans: ['IBM Plex Sans', 'sans-serif'],
+        mono: ['IBM Plex Mono', 'monospace'],
       }
     },
   },
