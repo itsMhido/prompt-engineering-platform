@@ -162,10 +162,19 @@ function PromptStudio() {
   };
 
   useEffect(() => {
-    loadVersionHistory('p1').then(data => {
-      setHistory(data);
-      setIsLoadingHistory(false);
-    });
+    loadVersionHistory()
+      .then(data => {
+        setHistory(data);
+        if (data.length > 0) {
+          setActiveVersion(data[0].version);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to load prompt history:", error);
+      })
+      .finally(() => {
+        setIsLoadingHistory(false);
+      });
   }, []);
 
   const variableRegex = /\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g;
@@ -195,10 +204,30 @@ function PromptStudio() {
 
   const handleSave = async () => {
     setIsSaving(true);
-    await savePromptVersion({ id: 'p1', version: 'v4' });
-    setIsSaving(false);
-    setShowSavedBadge(true);
-    setTimeout(() => setShowSavedBadge(false), 2000);
+    try {
+      const saved = await savePromptVersion({
+        title: "Prompt Studio Prompt",
+        description: "Saved from Prompt Studio",
+        modelName: "gpt-4-turbo",
+        temperature: 0.7,
+        systemPrompt,
+        userPromptTemplate: userPrompt,
+        variables,
+        notes: `Saved ${new Date().toLocaleString()}`,
+      });
+
+      const refreshedHistory = await loadVersionHistory();
+      setHistory(refreshedHistory);
+      if (saved?.version) {
+        setActiveVersion(saved.version);
+      }
+      setShowSavedBadge(true);
+      setTimeout(() => setShowSavedBadge(false), 2000);
+    } catch (error) {
+      console.error("Failed to save prompt:", error);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Helper to render prompt with highlighted variables
