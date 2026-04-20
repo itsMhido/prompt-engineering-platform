@@ -137,18 +137,20 @@ function TopBar() {
 // ---- PROMPT STUDIO ----
 
 function PromptStudio() {
-  const [systemPrompt, setSystemPrompt] = useState("You are an expert medical assistant. Reply in structured json.");
-  const [userPrompt, setUserPrompt] = useState("Patient shows symptoms of {symptom_1} and {symptom_2}. Patient age is {age}. Provide a diagnosis.");
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [userPrompt, setUserPrompt] = useState("");
   const [variables, setVariables] = useState({});
   const [isHoveringRun, setIsHoveringRun] = useState(false);
   const [output, setOutput] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
-  const [activeVersion, setActiveVersion] = useState('v3');
+  const [activeVersion, setActiveVersion] = useState('');
 
   const [history, setHistory] = useState([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [showSavedBadge, setShowSavedBadge] = useState(false);
+  const [copiedJSON, setCopiedJSON] = useState(false);
+  const [copiedOutput, setCopiedOutput] = useState(false);
 
   // Sync scroll between textarea and highlight layer
   const textAreaRef = useRef(null);
@@ -165,8 +167,23 @@ function PromptStudio() {
     loadVersionHistory('p1').then(data => {
       setHistory(data);
       setIsLoadingHistory(false);
+      if (data.length > 0) {
+        const latest = data[0];
+        setActiveVersion(latest.version);
+        setSystemPrompt(latest.systemPrompt);
+        setUserPrompt(latest.userPrompt);
+      }
     });
   }, []);
+
+  const handleSelectVersion = (versionId) => {
+    const v = history.find(h => h.version === versionId);
+    if (v) {
+      setActiveVersion(v.version);
+      setSystemPrompt(v.systemPrompt);
+      setUserPrompt(v.userPrompt);
+    }
+  };
 
   const variableRegex = /\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g;
 
@@ -195,10 +212,32 @@ function PromptStudio() {
 
   const handleSave = async () => {
     setIsSaving(true);
-    await savePromptVersion({ id: 'p1', version: 'v4' });
+    await savePromptVersion({ 
+      id: 'p1', 
+      systemPrompt, 
+      userPrompt 
+    });
+    const updatedHistory = await loadVersionHistory('p1');
+    setHistory(updatedHistory);
+    if (updatedHistory.length > 0) setActiveVersion(updatedHistory[0].version);
     setIsSaving(false);
     setShowSavedBadge(true);
     setTimeout(() => setShowSavedBadge(false), 2000);
+  };
+
+  const handleCopyJSON = () => {
+    const payload = JSON.stringify({ systemPrompt, userPrompt, variables }, null, 2);
+    navigator.clipboard.writeText(payload);
+    setCopiedJSON(true);
+    setTimeout(() => setCopiedJSON(false), 2000);
+  };
+
+  const handleCopyOutput = () => {
+    if (output) {
+      navigator.clipboard.writeText(output.text);
+      setCopiedOutput(true);
+      setTimeout(() => setCopiedOutput(false), 2000);
+    }
   };
 
   // Helper to render prompt with highlighted variables
@@ -240,7 +279,7 @@ function PromptStudio() {
           ) : history.map(v => (
             <button
               key={v.version}
-              onClick={() => setActiveVersion(v.version)}
+              onClick={() => handleSelectVersion(v.version)}
               className={cn(
                 "w-full text-left p-3 rounded-md transition-all border",
                 activeVersion === v.version
@@ -258,6 +297,7 @@ function PromptStudio() {
                 {activeVersion === v.version && <GitCommit size={14} className="text-primary" />}
               </div>
               <div className="text-xs text-text-muted truncate mt-1">{v.description}</div>
+              <div className="text-[10px] text-text-muted/60 mt-1">{v.createdAtDisplay}</div>
             </button>
           ))}
         </div>
@@ -279,8 +319,9 @@ function PromptStudio() {
             <button onClick={handleSave} disabled={isSaving} className="text-xs flex items-center gap-1 text-text-muted hover:text-text-main transition-colors">
               <Database size={14} /> {isSaving ? 'Saving...' : 'Save'}
             </button>
-            <button className="text-xs flex items-center gap-1 text-text-muted hover:text-text-main transition-colors">
-              <Copy size={14} /> Copy JSON
+            <button onClick={handleCopyJSON} className="text-xs flex items-center gap-1 text-text-muted hover:text-text-main transition-colors">
+              {copiedJSON ? <CheckCircle2 size={14} className="text-primary" /> : <Copy size={14} />} 
+              {copiedJSON ? 'Copied!' : 'Copy JSON'}
             </button>
           </div>
         </div>
@@ -389,8 +430,8 @@ function PromptStudio() {
               </div>
               <div className="bg-panel border border-border rounded-md p-4 group relative">
                 <pre className="font-mono text-sm inline-block text-text-main whitespace-pre-wrap">{output.text}</pre>
-                <button className="absolute top-2 right-2 p-1.5 bg-background border border-border rounded text-text-muted opacity-0 group-hover:opacity-100 transition-opacity hover:text-text-main hover:border-primary/50">
-                  <Copy size={14} />
+                <button onClick={handleCopyOutput} className="absolute top-2 right-2 p-1.5 bg-background border border-border rounded text-text-muted opacity-0 group-hover:opacity-100 transition-opacity hover:text-text-main hover:border-primary/50">
+                  {copiedOutput ? <CheckCircle2 size={14} className="text-primary" /> : <Copy size={14} />}
                 </button>
               </div>
             </div>
