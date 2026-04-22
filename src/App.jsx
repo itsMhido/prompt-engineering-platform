@@ -547,7 +547,7 @@ function PromptStudio() {
         nodes.push(<span key={`text-${lastIndex}`} className="text-text-main">{text.substring(lastIndex, match.index)}</span>);
       }
       nodes.push(
-        <span key={`var-${match.index}`} className="font-mono text-primary bg-primary/20 px-0.5 rounded">
+        <span key={`var-${match.index}`} className="var-highlight text-primary bg-primary/20">
           {match[0]}
         </span>
       );
