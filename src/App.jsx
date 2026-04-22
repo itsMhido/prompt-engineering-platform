@@ -2,11 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Box, Database, TerminalSquare, FlaskConical, Target,
   Play, Plus, Settings2, GitCommit, Copy, CheckCircle2,
-  AlertTriangle, Clock, Activity, HardDrive, ChevronRight
+  AlertTriangle, Clock, Activity, HardDrive, ChevronRight,
+  Trash2, Edit2, Eye, EyeOff
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { savePromptVersion, loadVersionHistory, runPromptTest } from './mockApi';
+import { savePromptVersion, loadVersionHistory, callModel, loadModels, saveModel, validateModel, deleteModel } from './mockApi';
 
 // Util for tailwind classes
 function cn(...inputs) {
@@ -151,6 +152,10 @@ function PromptStudio() {
   const [showSavedBadge, setShowSavedBadge] = useState(false);
   const [copiedJSON, setCopiedJSON] = useState(false);
   const [copiedOutput, setCopiedOutput] = useState(false);
+  const [commitMessage, setCommitMessage] = useState('');
+
+  const [models, setModels] = useState([]);
+  const [selectedModelId, setSelectedModelId] = useState('');
 
   // Sync scroll between textarea and highlight layer
   const textAreaRef = useRef(null);
@@ -173,6 +178,11 @@ function PromptStudio() {
         setSystemPrompt(latest.systemPrompt);
         setUserPrompt(latest.userPrompt);
       }
+    });
+
+    loadModels().then(data => {
+      setModels(data);
+      if (data.length > 0) setSelectedModelId(data[0].id);
     });
   }, []);
 
@@ -199,14 +209,32 @@ function PromptStudio() {
   }, [userPrompt]);
 
   const handleRun = async () => {
+    if (!selectedModelId) return;
     setIsRunning(true);
-    const result = await runPromptTest(activeVersion, variables, 'gpt-4-turbo');
-    setOutput({
-      text: result.output,
-      latency: result.latency,
-      tokens: result.tokensUsed.total,
-      cost: result.costEstimate
-    });
+    setOutput(null);
+    try {
+      const modelObj = models.find(m => m.id === selectedModelId);
+      if (!modelObj || !modelObj.apiKey) {
+        setOutput({ error: "Add an API key in Model Management" });
+        setIsRunning(false);
+        return;
+      }
+      // Interpolate variables
+      let interpolatedUserMessage = userPrompt;
+      Object.keys(variables).forEach(key => {
+        const value = variables[key] || `{${key}}`; // leave as-is if empty
+        interpolatedUserMessage = interpolatedUserMessage.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
+      });
+      const result = await callModel(modelObj, systemPrompt, interpolatedUserMessage);
+      setOutput({
+        text: result.text,
+        latency: result.latency,
+        tokens: result.tokens.total,
+        cost: result.cost
+      });
+    } catch (error) {
+      setOutput({ error: error.message });
+    }
     setIsRunning(false);
   };
 
@@ -215,13 +243,15 @@ function PromptStudio() {
     await savePromptVersion({ 
       id: 'p1', 
       systemPrompt, 
-      userPrompt 
+      userPrompt,
+      commitMessage: commitMessage || 'Saved draft version'
     });
     const updatedHistory = await loadVersionHistory('p1');
     setHistory(updatedHistory);
     if (updatedHistory.length > 0) setActiveVersion(updatedHistory[0].version);
     setIsSaving(false);
     setShowSavedBadge(true);
+    setCommitMessage('');
     setTimeout(() => setShowSavedBadge(false), 2000);
   };
 
@@ -305,10 +335,20 @@ function PromptStudio() {
 
       {/* Editor Pane */}
       <div className="flex-1 flex flex-col border-r border-border min-w-0">
-        <div className="p-4 border-b border-border flex justify-between items-center bg-panel/50">
+        <div className="p-4 border-b border-border flex justify-between items-center gap-4 bg-panel/50">
           <div className="flex items-center gap-2">
             <TerminalSquare size={18} className="text-primary" />
             <span className="font-medium">Editor</span>
+          </div>
+          <div className="flex items-center gap-3 flex-1">
+            <input
+              type="text"
+              value={commitMessage}
+              onChange={(e) => setCommitMessage(e.target.value)}
+              placeholder="Commit message (optional)"
+              className="flex-1 max-w-xs bg-background border border-border rounded px-3 py-1.5 text-xs focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/50 text-text-main placeholder-text-muted"
+              onKeyDown={(e) => { if (e.key === 'Enter' && !isSaving) handleSave(); }}
+            />
           </div>
           <div className="flex items-center gap-3">
             {showSavedBadge && (
@@ -391,15 +431,26 @@ function PromptStudio() {
       {/* Output / Preview Pane */}
       <div className="w-[45%] flex flex-col bg-background min-w-0">
         <div className="p-4 border-b border-border flex justify-between items-center bg-panel/50">
-          <div className="flex items-center gap-2">
-            <Activity size={18} className="text-primary" />
-            <span className="font-medium">Output Preview</span>
+          <div className="flex items-center gap-3">
+            <Activity size={18} className="text-primary hidden sm:block" />
+            <span className="font-medium hidden sm:block">Output Preview</span>
+            <select
+              value={selectedModelId}
+              onChange={(e) => setSelectedModelId(e.target.value)}
+              className="bg-background border border-border rounded px-3 py-1 text-xs font-medium focus:outline-none focus:border-primary/50 text-text-main max-w-[200px] truncate"
+            >
+              {models.filter(m => m.status === 'active').map(m => (
+                <option key={m.id} value={m.id} disabled={!m.apiKey}>
+                  {m.provider} - {m.name} {!m.apiKey ? '(No Key)' : ''}
+                </option>
+              ))}
+            </select>
           </div>
           <button
             onMouseEnter={() => setIsHoveringRun(true)}
             onMouseLeave={() => setIsHoveringRun(false)}
             onClick={handleRun}
-            disabled={isRunning}
+            disabled={isRunning || !selectedModelId || !models.find(m => m.id === selectedModelId)?.apiKey}
             className={cn(
               "flex items-center gap-2 px-4 py-1.5 rounded bg-primary text-panel font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed",
               isHoveringRun && !isRunning ? "scale-105" : ""
@@ -417,23 +468,35 @@ function PromptStudio() {
         <div className="flex-1 p-4 overflow-y-auto">
           {output ? (
             <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-              <div className="flex items-center gap-4 mb-4 flex-wrap">
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-panel border border-border text-xs font-mono text-text-muted">
-                  <Clock size={12} className="text-amber-400" /> Latency: {output.latency}
+              {output.error ? (
+                <div className="bg-red-500/10 border border-red-500/20 rounded-md p-4 mb-4">
+                  <div className="flex items-center gap-2 text-red-400 font-medium mb-2">
+                    <AlertTriangle size={16} />
+                    API Error
+                  </div>
+                  <p className="text-red-300 text-sm">{output.error}</p>
                 </div>
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-panel border border-border text-xs font-mono text-text-muted">
-                  <Activity size={12} className="text-primary" /> Tokens: {output.tokens}
-                </div>
-                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-panel border border-border text-xs font-mono text-text-muted">
-                  Cost: <span className="text-green-500">{output.cost}</span>
-                </div>
-              </div>
-              <div className="bg-panel border border-border rounded-md p-4 group relative">
-                <pre className="font-mono text-sm inline-block text-text-main whitespace-pre-wrap">{output.text}</pre>
-                <button onClick={handleCopyOutput} className="absolute top-2 right-2 p-1.5 bg-background border border-border rounded text-text-muted opacity-0 group-hover:opacity-100 transition-opacity hover:text-text-main hover:border-primary/50">
-                  {copiedOutput ? <CheckCircle2 size={14} className="text-primary" /> : <Copy size={14} />}
-                </button>
-              </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-4 mb-4 flex-wrap">
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-panel border border-border text-xs font-mono text-text-muted">
+                      <Clock size={12} className="text-amber-400" /> Latency: {output.latency}
+                    </div>
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-panel border border-border text-xs font-mono text-text-muted">
+                      <Activity size={12} className="text-primary" /> Tokens: {output.tokens}
+                    </div>
+                    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-panel border border-border text-xs font-mono text-text-muted">
+                      💰 {output.cost}
+                    </div>
+                  </div>
+                  <div className="bg-panel border border-border rounded-md p-4 group relative">
+                    <pre className="font-mono text-sm inline-block text-text-main whitespace-pre-wrap">{output.text}</pre>
+                    <button onClick={handleCopyOutput} className="absolute top-2 right-2 p-1.5 bg-background border border-border rounded text-text-muted opacity-0 group-hover:opacity-100 transition-opacity hover:text-text-main hover:border-primary/50">
+                      {copiedOutput ? <CheckCircle2 size={14} className="text-primary" /> : <Copy size={14} />}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           ) : (
             <div className="h-full flex flex-col items-center justify-center text-text-muted opacity-50">
@@ -515,48 +578,409 @@ function ExperimentsView() {
 
 // ---- MODEL REGISTRY ----
 
+const PROVIDER_DEFAULTS = {
+  OpenAI: {
+    endpoint: 'https://api.openai.com/v1/chat/completions',
+    modelId: 'gpt-4-turbo'
+  },
+  Anthropic: {
+    endpoint: 'https://api.anthropic.com/v1/messages',
+    modelId: 'claude-3-5-sonnet-20241022'
+  },
+  Google: {
+    endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
+    modelId: 'gemini-1.5-pro'
+  },
+  Mistral: {
+    endpoint: 'https://api.mistral.ai/v1/chat/completions',
+    modelId: 'mistral-large-latest'
+  },
+  Groq: {
+    endpoint: 'https://api.groq.com/openai/v1/chat/completions',
+    modelId: 'llama-3.1-8b-instant'
+  },
+  Custom: {
+    endpoint: '',
+    modelId: ''
+  }
+};
+
 function ModelRegistry() {
+  const [models, setModels] = useState([]);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingModel, setEditingModel] = useState(null);
+  const [formData, setFormData] = useState({
+    name: '',
+    provider: 'OpenAI',
+    modelId: '',
+    endpoint: '',
+    apiKey: '',
+    temperature: 0.7,
+    maxTokens: 4096,
+    topP: 1.0,
+    stopSequences: [],
+    status: 'active'
+  });
+  const [showApiKey, setShowApiKey] = useState(false);
+
+  useEffect(() => {
+    loadModels().then(setModels);
+  }, []);
+
+  const handleProviderChange = (provider) => {
+    const defaults = PROVIDER_DEFAULTS[provider];
+    setFormData(prev => ({
+      ...prev,
+      provider,
+      modelId: defaults.modelId,
+      endpoint: defaults.endpoint
+    }));
+  };
+
+  const handleSave = async () => {
+    const modelToSave = editingModel ? { ...editingModel, ...formData } : { ...formData, id: `m${Date.now()}` };
+    const saved = await saveModel(modelToSave);
+    setModels(prev => {
+      const idx = prev.findIndex(m => m.id === saved.id);
+      if (idx > -1) {
+        const next = [...prev];
+        next[idx] = saved;
+        return next;
+      }
+      return [...prev, saved];
+    });
+    setIsModalOpen(false);
+    setEditingModel(null);
+    setFormData({
+      name: '',
+      provider: 'OpenAI',
+      modelId: '',
+      endpoint: '',
+      apiKey: '',
+      temperature: 0.7,
+      maxTokens: 4096,
+      topP: 1.0,
+      stopSequences: [],
+      status: 'active'
+    });
+    setShowApiKey(false);
+  };
+
+  const handleEdit = (model) => {
+    setEditingModel(model);
+    setFormData({
+      name: model.name,
+      provider: model.provider,
+      modelId: model.modelId,
+      endpoint: model.endpoint,
+      apiKey: model.apiKey,
+      temperature: model.temperature,
+      maxTokens: model.maxTokens,
+      topP: model.topP,
+      stopSequences: model.stopSequences || [],
+      status: model.status
+    });
+    setShowApiKey(false);
+    setIsModalOpen(true);
+  };
+
+  const handleDuplicate = (model) => {
+    setEditingModel(null);
+    setFormData({
+      name: `${model.name} Copy`,
+      provider: model.provider,
+      modelId: model.modelId,
+      endpoint: model.endpoint,
+      apiKey: '', // Don't copy API key
+      temperature: model.temperature,
+      maxTokens: model.maxTokens,
+      topP: model.topP,
+      stopSequences: model.stopSequences || [],
+      status: model.status
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleDelete = async (id) => {
+    if (confirm("Are you sure you want to remove this model?")) {
+      await deleteModel(id);
+      setModels(prev => prev.filter(m => m.id !== id));
+    }
+  };
+
+  const getProviderColor = (provider) => {
+    const colors = {
+      OpenAI: 'bg-blue-500',
+      Anthropic: 'bg-orange-500',
+      Google: 'bg-green-500',
+      Mistral: 'bg-purple-500',
+      Groq: 'bg-yellow-600',
+      Custom: 'bg-gray-500'
+    };
+    return colors[provider] || 'bg-gray-500';
+  };
+
   return (
     <div className="p-8 h-full overflow-y-auto animate-in fade-in duration-300">
       <div className="flex justify-between items-center mb-6">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight mb-1">Model Registry</h2>
-          <p className="text-text-muted">Manage available LLMs and provider configurations.</p>
+          <h2 className="text-2xl font-bold tracking-tight mb-1">Model Management</h2>
+          <p className="text-text-muted">Configure and manage AI models for prompt execution.</p>
         </div>
-        <button className="flex items-center gap-2 bg-text-main text-panel px-4 py-2 rounded-md font-medium hover:bg-white transition-colors">
+        <button onClick={() => { setIsModalOpen(true); setEditingModel(null); handleProviderChange('OpenAI'); }} className="flex items-center gap-2 bg-primary text-panel px-4 py-2 rounded-md font-medium hover:bg-primary/90 transition-colors">
           <Plus size={16} /> Add Model
         </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {MOCK_MODELS.map(model => (
+        {models.map(model => (
           <div key={model.id} className="glass-panel rounded-lg p-5 hover:border-primary/50 transition-colors group">
             <div className="flex justify-between items-start mb-4">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded bg-background border border-border flex items-center justify-center">
-                  <HardDrive size={20} className="text-text-muted group-hover:text-primary transition-colors" />
+                <div className={`w-8 h-8 rounded ${getProviderColor(model.provider)} flex items-center justify-center text-white text-xs font-bold`}>
+                  {model.provider[0]}
                 </div>
                 <div>
                   <h3 className="font-bold text-lg leading-tight">{model.name}</h3>
-                  <p className="text-text-muted text-xs">{model.provider}</p>
+                  <p className="text-text-muted text-sm">{model.provider}</p>
                 </div>
               </div>
-              <span className="font-mono text-xs px-2 py-0.5 rounded-full border bg-panel border-border text-text-muted">
-                {model.version}
-              </span>
+              <div className="flex flex-col items-end gap-2">
+                <div className={cn(
+                  "font-mono text-xs px-2 py-0.5 rounded-full border",
+                  model.status === 'active' ? "bg-green-500/20 text-green-400 border-green-500/50" : "bg-red-500/20 text-red-400 border-red-500/50"
+                )}>
+                  {model.status}
+                </div>
+                <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button onClick={() => handleEdit(model)} className="p-1.5 rounded text-text-muted hover:text-blue-400 hover:bg-blue-400/10 transition-colors">
+                    <Edit2 size={14} />
+                  </button>
+                  <button onClick={() => handleDuplicate(model)} className="p-1.5 rounded text-text-muted hover:text-yellow-400 hover:bg-yellow-400/10 transition-colors">
+                    <Copy size={14} />
+                  </button>
+                  <button onClick={() => handleDelete(model.id)} className="p-1.5 rounded text-text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors">
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
             </div>
 
-            <div className="flex gap-2">
-              <div className="bg-background rounded border border-border px-2.5 py-1 text-xs font-mono text-text-muted flex items-center gap-1.5">
-                <Settings2 size={12} /> T: {model.temp}
+            <div className="space-y-3">
+              <div className="text-xs text-text-muted">
+                <strong>Model:</strong> {model.modelId}
               </div>
-              <div className="bg-background rounded border border-border px-2.5 py-1 text-xs font-mono text-text-muted flex items-center gap-1.5">
-                MAX: {model.tokens}
+              <div className="flex gap-2 flex-wrap">
+                <div className="bg-background rounded border border-border px-2.5 py-1 text-xs font-mono text-text-muted">
+                  T: {model.temperature}
+                </div>
+                <div className="bg-background rounded border border-border px-2.5 py-1 text-xs font-mono text-text-muted">
+                  Max: {model.maxTokens}
+                </div>
+                <div className="bg-background rounded border border-border px-2.5 py-1 text-xs font-mono text-text-muted">
+                  P: {model.topP}
+                </div>
               </div>
+              {model.apiKey && (
+                <div className="text-xs text-green-500 flex items-center gap-1">
+                  <CheckCircle2 size={12} /> Key configured
+                </div>
+              )}
             </div>
           </div>
         ))}
       </div>
+
+      {/* Modal */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setIsModalOpen(false)}>
+          <div className="bg-panel border border-border rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <h3 className="text-xl font-bold mb-4">{editingModel ? 'Edit Model' : 'Add New Model'}</h3>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Model Name</label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={e => setFormData({...formData, name: e.target.value})}
+                    className="w-full bg-background border border-border rounded px-3 py-2 focus:border-primary/50 outline-none"
+                    placeholder="e.g. GPT-4 Turbo"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Provider</label>
+                  <select
+                    value={formData.provider}
+                    onChange={e => handleProviderChange(e.target.value)}
+                    className="w-full bg-background border border-border rounded px-3 py-2 focus:border-primary/50 outline-none"
+                  >
+                    <option>OpenAI</option>
+                    <option>Anthropic</option>
+                    <option>Google</option>
+                    <option>Mistral</option>
+                    <option>Groq</option>
+                    <option>Custom</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Model ID / Version</label>
+                  <input
+                    type="text"
+                    value={formData.modelId}
+                    onChange={e => setFormData({...formData, modelId: e.target.value})}
+                    className="w-full bg-background border border-border rounded px-3 py-2 focus:border-primary/50 outline-none"
+                    placeholder="e.g. gpt-4-turbo"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Base URL / Endpoint</label>
+                  <input
+                    type="text"
+                    value={formData.endpoint}
+                    onChange={e => setFormData({...formData, endpoint: e.target.value})}
+                    className="w-full bg-background border border-border rounded px-3 py-2 focus:border-primary/50 outline-none"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">API Key</label>
+                <div className="relative">
+                  {editingModel && !showApiKey ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value="••••••••••••"
+                        readOnly
+                        className="flex-1 bg-background border border-border rounded px-3 py-2 focus:border-primary/50 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowApiKey(true)}
+                        className="px-3 py-2 bg-primary text-panel rounded text-sm hover:bg-primary/90"
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <input
+                        type={showApiKey ? 'text' : 'password'}
+                        value={formData.apiKey}
+                        onChange={e => setFormData({...formData, apiKey: e.target.value})}
+                        className="w-full bg-background border border-border rounded px-3 py-2 pr-10 focus:border-primary/50 outline-none"
+                        placeholder="Enter API key"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowApiKey(!showApiKey)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-main"
+                      >
+                        {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                      </button>
+                    </>
+                  )}
+                </div>
+                {editingModel && formData.apiKey && showApiKey && (
+                  <p className="text-xs text-text-muted mt-1">Editing will replace the saved key</p>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Temperature: {formData.temperature}</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={formData.temperature}
+                    onChange={e => setFormData({...formData, temperature: parseFloat(e.target.value)})}
+                    className="w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Max Tokens</label>
+                  <input
+                    type="number"
+                    value={formData.maxTokens}
+                    onChange={e => setFormData({...formData, maxTokens: parseInt(e.target.value)})}
+                    className="w-full bg-background border border-border rounded px-3 py-2 focus:border-primary/50 outline-none"
+                  />
+                  <div className="flex gap-1 mt-1">
+                    {[256, 512, 1024, 4096].map(preset => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setFormData({...formData, maxTokens: preset})}
+                        className="text-xs bg-background border border-border rounded px-2 py-1 hover:border-primary/50"
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Top P: {formData.topP}</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={formData.topP}
+                    onChange={e => setFormData({...formData, topP: parseFloat(e.target.value)})}
+                    className="w-full"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Stop Sequences</label>
+                <input
+                  type="text"
+                  value={formData.stopSequences.join(', ')}
+                  onChange={e => setFormData({...formData, stopSequences: e.target.value.split(',').map(s => s.trim()).filter(s => s)})}
+                  className="w-full bg-background border border-border rounded px-3 py-2 focus:border-primary/50 outline-none"
+                  placeholder="Comma-separated stop sequences"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Status</label>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="status"
+                      value="active"
+                      checked={formData.status === 'active'}
+                      onChange={e => setFormData({...formData, status: e.target.value})}
+                    />
+                    Active
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="status"
+                      value="inactive"
+                      checked={formData.status === 'inactive'}
+                      onChange={e => setFormData({...formData, status: e.target.value})}
+                    />
+                    Inactive
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6">
+              <button onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-text-muted hover:text-text-main transition-colors">
+                Cancel
+              </button>
+              <button onClick={handleSave} className="px-4 py-2 bg-primary text-panel rounded hover:bg-primary/90 transition-colors">
+                Save Model
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

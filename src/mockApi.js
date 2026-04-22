@@ -1,31 +1,108 @@
-const DB_KEY = 'prompt_env_data';
+const MODELS_KEY = 'pe_models';
+const PROMPTS_KEY = 'pe_prompts';
 
-function loadDb() {
-  const data = localStorage.getItem(DB_KEY);
-  if (data) {
-    try { return JSON.parse(data); } catch (e) { return initDb(); }
+function loadModelsDb() {
+  const data = localStorage.getItem(MODELS_KEY);
+  if (!data) {
+    return initModelsDb();
   }
-  return initDb();
+  try {
+    const parsed = JSON.parse(data);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return initModelsDb();
+    }
+    return parsed;
+  } catch (e) {
+    return initModelsDb();
+  }
 }
 
-function saveDb(data) {
-  localStorage.setItem(DB_KEY, JSON.stringify(data));
+function saveModelsDb(data) {
+  localStorage.setItem(MODELS_KEY, JSON.stringify(data));
 }
 
-function initDb() {
-  const initial = {
-    prompts: {
-      p1: {
-        versions: [
-          { version: 'v3', label: 'v3', description: 'Added context variable', createdAt: new Date().toISOString(), systemPrompt: "You are an expert medical assistant. Reply in structured json.", userPrompt: "Patient shows symptoms of {symptom_1} and {symptom_2}. Patient age is {age}. Provide a diagnosis." },
-          { version: 'v2', label: 'v2', description: 'Tweaked temperature instructions', createdAt: new Date(Date.now() - 3600000).toISOString(), systemPrompt: "You are a medical assistant. Reply in json.", userPrompt: "Patient shows symptoms of {symptom_1}. Provide a diagnosis." },
-          { version: 'v1', label: 'v1', description: 'Initial version', createdAt: new Date(Date.now() - 86400000).toISOString(), systemPrompt: "You are a medical bot. Be helpful.", userPrompt: "Patient is sick with {symptom_1}. Help." }
-        ]
-      }
+function initModelsDb() {
+  const initial = [
+    {
+      id: 'm1',
+      name: 'GPT-4 Turbo',
+      provider: 'OpenAI',
+      modelId: 'gpt-4-turbo',
+      endpoint: 'https://api.openai.com/v1/chat/completions',
+      apiKey: '',
+      temperature: 0.7,
+      maxTokens: 4096,
+      topP: 1.0,
+      stopSequences: [],
+      status: 'active'
     },
-    experiments: []
+    {
+      id: 'm2',
+      name: 'Claude Sonnet',
+      provider: 'Anthropic',
+      modelId: 'claude-3-5-sonnet-20241022',
+      endpoint: 'https://api.anthropic.com/v1/messages',
+      apiKey: '',
+      temperature: 0.5,
+      maxTokens: 4096,
+      topP: 1.0,
+      stopSequences: [],
+      status: 'active'
+    },
+    {
+      id: 'm3',
+      name: 'Gemini Pro',
+      provider: 'Google',
+      modelId: 'gemini-1.5-pro',
+      endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent',
+      apiKey: '',
+      temperature: 0.2,
+      maxTokens: 4096,
+      topP: 1.0,
+      stopSequences: [],
+      status: 'active'
+    },
+    {
+      id: 'm4',
+      name: 'Mistral Large',
+      provider: 'Mistral',
+      modelId: 'mistral-large-latest',
+      endpoint: 'https://api.mistral.ai/v1/chat/completions',
+      apiKey: '',
+      temperature: 0.7,
+      maxTokens: 4096,
+      topP: 1.0,
+      stopSequences: [],
+      status: 'active'
+    }
+  ];
+  saveModelsDb(initial);
+  return initial;
+}
+
+function loadPromptsDb() {
+  const data = localStorage.getItem(PROMPTS_KEY);
+  if (data) {
+    try { return JSON.parse(data); } catch (e) { return initPromptsDb(); }
+  }
+  return initPromptsDb();
+}
+
+function savePromptsDb(data) {
+  localStorage.setItem(PROMPTS_KEY, JSON.stringify(data));
+}
+
+function initPromptsDb() {
+  const initial = {
+    p1: {
+      versions: [
+        { version: 'v3', label: 'v3', description: 'Added context variable', createdAt: new Date().toISOString(), systemPrompt: "You are an expert medical assistant. Reply in structured json.", userPrompt: "Patient shows symptoms of {symptom_1} and {symptom_2}. Patient age is {age}. Provide a diagnosis." },
+        { version: 'v2', label: 'v2', description: 'Tweaked temperature instructions', createdAt: new Date(Date.now() - 3600000).toISOString(), systemPrompt: "You are a medical assistant. Reply in json.", userPrompt: "Patient shows symptoms of {symptom_1}. Provide a diagnosis." },
+        { version: 'v1', label: 'v1', description: 'Initial version', createdAt: new Date(Date.now() - 86400000).toISOString(), systemPrompt: "You are a medical bot. Be helpful.", userPrompt: "Patient is sick with {symptom_1}. Help." }
+      ]
+    }
   };
-  saveDb(initial);
+  savePromptsDb(initial);
   return initial;
 }
 
@@ -47,9 +124,9 @@ function timeAgo(dateString) {
 export const savePromptVersion = async (promptData) => {
   return new Promise(resolve => {
     setTimeout(() => {
-      const db = loadDb();
-      if (!db.prompts[promptData.id]) db.prompts[promptData.id] = { versions: [] };
-      const versions = db.prompts[promptData.id].versions;
+      const db = loadPromptsDb();
+      if (!db[promptData.id]) db[promptData.id] = { versions: [] };
+      const versions = db[promptData.id].versions;
       
       const newVersionNum = versions.length > 0 ? parseInt(versions[0].version.replace('v', '')) + 1 : 1;
       const newVersionName = `v${newVersionNum}`;
@@ -57,14 +134,14 @@ export const savePromptVersion = async (promptData) => {
       const newEntry = {
         version: newVersionName,
         label: newVersionName,
-        description: 'Saved draft version',
+        description: promptData.commitMessage || 'Saved draft version',
         createdAt: new Date().toISOString(),
         systemPrompt: promptData.systemPrompt || "",
         userPrompt: promptData.userPrompt || ""
       };
       
       versions.unshift(newEntry);
-      saveDb(db);
+      savePromptsDb(db);
       
       resolve(newEntry);
     }, 300);
@@ -74,8 +151,8 @@ export const savePromptVersion = async (promptData) => {
 export const loadVersionHistory = async (promptId) => {
   return new Promise(resolve => {
     setTimeout(() => {
-      const db = loadDb();
-      const versions = db.prompts[promptId]?.versions || [];
+      const db = loadPromptsDb();
+      const versions = db[promptId]?.versions || [];
       const mapped = versions.map(v => ({
         ...v,
         createdAtDisplay: timeAgo(v.createdAt)
@@ -85,46 +162,173 @@ export const loadVersionHistory = async (promptId) => {
   });
 };
 
-export const runPromptTest = async (promptVersion, variables, model) => {
-  return new Promise(resolve => {
-    const latency = Math.floor(Math.random() * (1200 - 300 + 1)) + 300;
-    setTimeout(() => {
-      let diagnosis = "Common Cold";
-      if (variables.symptom_1 && variables.symptom_1.toLowerCase().includes('fever')) diagnosis = "Flu";
-      if (variables.symptom_2 && variables.symptom_2.toLowerCase().includes('cough')) diagnosis = "Flu or Bronchitis";
-      
-      const outputObj = {
-        diagnosis: diagnosis,
-        confidence: 0.82 + (Math.random() * 0.15),
-        recommended_action: "Rest, monitor symptoms, and hydrate."
-      };
+export const callModel = async (model, systemPrompt, userMessage) => {
+  const startTime = Date.now();
 
-      const outputJson = JSON.stringify(outputObj, null, 2);
+  try {
+    let response;
+    let body;
+    let headers = {};
+    let latency;
+    let result;
 
-      const db = loadDb();
-      const experimentId = `e${Math.floor(Math.random()*10000)}`;
-      db.experiments.unshift({
-        id: experimentId,
-        promptVersion: promptVersion,
-        model: model,
-        dataset: 'Manual Run',
-        latency: `${latency}ms`,
-        cost: "$0.001",
-        score: Math.floor(Math.random() * 20) + 80,
-        date: new Date().toISOString()
-      });
-      saveDb(db);
+    switch (model.provider.toLowerCase()) {
+      case 'anthropic':
+        headers = {
+          'x-api-key': model.apiKey,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json'
+        };
+        body = {
+          model: model.modelId,
+          max_tokens: model.maxTokens,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userMessage }]
+        };
+        response = await fetch(model.endpoint, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body)
+        });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
+          throw new Error(errorData.error?.message || `HTTP ${response.status}`);
+        }
+        const anthropicData = await response.json();
+        latency = Date.now() - startTime;
+        result = {
+          text: anthropicData.content[0]?.text || '',
+          tokens: { input: anthropicData.usage?.input_tokens || 0, output: anthropicData.usage?.output_tokens || 0, total: (anthropicData.usage?.input_tokens || 0) + (anthropicData.usage?.output_tokens || 0) },
+          latency: `${latency}ms`,
+          cost: estimateCost(model.provider, anthropicData.usage?.input_tokens || 0, anthropicData.usage?.output_tokens || 0)
+        };
+        break;
 
-      resolve({
-        output: outputJson,
-        latency: `${latency}ms`,
-        tokensUsed: { prompt: 130, completion: 45, total: 175 },
-        costEstimate: "$0.0016",
-        status: "success"
-      });
-    }, latency);
-  });
+      case 'openai':
+      case 'mistral':
+      case 'groq':
+        headers = {
+          'Authorization': `Bearer ${model.apiKey}`,
+          'content-type': 'application/json'
+        };
+        body = {
+          model: model.modelId,
+          max_tokens: model.maxTokens,
+          temperature: model.temperature,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage }
+          ]
+        };
+        response = await fetch(model.endpoint, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body)
+        });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
+          throw new Error(errorData.error?.message || `HTTP ${response.status}`);
+        }
+        const openaiData = await response.json();
+        latency = Date.now() - startTime;
+        result = {
+          text: openaiData.choices[0]?.message?.content || '',
+          tokens: { input: openaiData.usage?.prompt_tokens || 0, output: openaiData.usage?.completion_tokens || 0, total: openaiData.usage?.total_tokens || 0 },
+          latency: `${latency}ms`,
+          cost: estimateCost(model.provider, openaiData.usage?.prompt_tokens || 0, openaiData.usage?.completion_tokens || 0)
+        };
+        break;
+
+      case 'google':
+        const googleUrl = new URL(model.endpoint.replace('{model}', model.modelId));
+        googleUrl.searchParams.set('key', model.apiKey);
+        body = {
+          contents: [{ parts: [{ text: userMessage }] }],
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          generationConfig: {
+            maxOutputTokens: model.maxTokens,
+            temperature: model.temperature
+          }
+        };
+        response = await fetch(googleUrl.toString(), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
+          throw new Error(errorData.error?.message || `HTTP ${response.status}`);
+        }
+        const googleData = await response.json();
+        latency = Date.now() - startTime;
+        result = {
+          text: googleData.candidates[0]?.content?.parts[0]?.text || '',
+          tokens: { input: googleData.usageMetadata?.promptTokenCount || 0, output: googleData.usageMetadata?.candidatesTokenCount || 0, total: (googleData.usageMetadata?.promptTokenCount || 0) + (googleData.usageMetadata?.candidatesTokenCount || 0) },
+          latency: `${latency}ms`,
+          cost: estimateCost(model.provider, googleData.usageMetadata?.promptTokenCount || 0, googleData.usageMetadata?.candidatesTokenCount || 0)
+        };
+        break;
+
+      case 'custom':
+        // Attempt OpenAI-compatible
+        headers = {
+          'Authorization': `Bearer ${model.apiKey}`,
+          'content-type': 'application/json'
+        };
+        body = {
+          model: model.modelId,
+          max_tokens: model.maxTokens,
+          temperature: model.temperature,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userMessage }
+          ]
+        };
+        response = await fetch(model.endpoint, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body)
+        });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
+          throw new Error(errorData.error?.message || `HTTP ${response.status}`);
+        }
+        const customData = await response.json();
+        latency = Date.now() - startTime;
+        result = {
+          text: customData.choices?.[0]?.message?.content || customData.content?.[0]?.text || '',
+          tokens: { input: customData.usage?.prompt_tokens || customData.usage?.input_tokens || 0, output: customData.usage?.completion_tokens || customData.usage?.output_tokens || 0, total: customData.usage?.total_tokens || 0 },
+          latency: `${latency}ms`,
+          cost: '~$0.00' // Unknown for custom
+        };
+        break;
+
+      default:
+        throw new Error(`Unsupported provider: ${model.provider}`);
+    }
+
+    return result;
+  } catch (error) {
+    throw error;
+  }
 };
+
+function estimateCost(provider, inputTokens, outputTokens) {
+  // Groq is free tier
+  if (provider.toLowerCase() === 'groq') {
+    return 'Free tier';
+  }
+  // Approximate rates per 1k tokens
+  const rates = {
+    openai: { input: 0.0015, output: 0.002 },
+    anthropic: { input: 0.003, output: 0.015 },
+    google: { input: 0.00025, output: 0.0005 },
+    mistral: { input: 0.0002, output: 0.0006 }
+  };
+  const rate = rates[provider.toLowerCase()] || { input: 0, output: 0 };
+  const cost = ((inputTokens / 1000) * rate.input) + ((outputTokens / 1000) * rate.output);
+  return `~$${cost.toFixed(4)}`;
+}
 
 export const loadExperiments = async () => {
     return new Promise(resolve => {
@@ -137,4 +341,63 @@ export const loadExperiments = async () => {
             resolve(mapped);
         }, 300);
     });
+};
+
+export const loadModels = async () => {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      const models = loadModelsDb();
+      resolve(models);
+    }, 300);
+  });
+};
+
+export const saveModel = async (modelData) => {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      const models = loadModelsDb();
+      let savedModel;
+      if (modelData.id) {
+        const index = models.findIndex(m => m.id === modelData.id);
+        if (index > -1) {
+          models[index] = { ...models[index], ...modelData };
+          savedModel = models[index];
+        }
+      }
+      if (!savedModel) {
+        savedModel = {
+          id: `m${Date.now()}`,
+          ...modelData
+        };
+        models.push(savedModel);
+      }
+      saveModelsDb(models);
+      resolve(savedModel);
+    }, 300);
+  });
+};
+
+export const deleteModel = async (modelId) => {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      const models = loadModelsDb();
+      const filtered = models.filter(m => m.id !== modelId);
+      saveModelsDb(filtered);
+      resolve(true);
+    }, 300);
+  });
+};
+
+export const validateModel = async (name, apiKey) => {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      if (!apiKey || apiKey.length < 5) {
+        resolve({ valid: false, error: "Invalid API Key length/format." });
+      } else if (!name || name.trim().length < 3) {
+        resolve({ valid: false, error: "Model name is required." });
+      } else {
+        resolve({ valid: true });
+      }
+    }, 800);
+  });
 };
