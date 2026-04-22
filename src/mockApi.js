@@ -1,5 +1,26 @@
 const MODELS_KEY = 'pe_models';
 const PROMPTS_KEY = 'pe_prompts';
+const GOOGLE_GENERATE_CONTENT_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent';
+const GOOGLE_DEFAULT_MODEL_ID = 'gemini-2.5-flash';
+
+function normalizeModelConfig(model) {
+  if (model?.provider !== 'Google') {
+    return model;
+  }
+
+  const usesGoogleGenerateContentEndpoint = typeof model.endpoint === 'string'
+    && model.endpoint.includes('https://generativelanguage.googleapis.com/')
+    && model.endpoint.includes(':generateContent');
+
+  if (!usesGoogleGenerateContentEndpoint || model.endpoint.includes('{model}')) {
+    return model;
+  }
+
+  return {
+    ...model,
+    endpoint: GOOGLE_GENERATE_CONTENT_ENDPOINT
+  };
+}
 
 function loadModelsDb() {
   const data = localStorage.getItem(MODELS_KEY);
@@ -11,7 +32,11 @@ function loadModelsDb() {
     if (!Array.isArray(parsed) || parsed.length === 0) {
       return initModelsDb();
     }
-    return parsed;
+    const normalized = parsed.map(normalizeModelConfig);
+    if (JSON.stringify(normalized) !== JSON.stringify(parsed)) {
+      saveModelsDb(normalized);
+    }
+    return normalized;
   } catch (e) {
     return initModelsDb();
   }
@@ -51,10 +76,10 @@ function initModelsDb() {
     },
     {
       id: 'm3',
-      name: 'Gemini Pro',
+      name: 'Gemini Flash',
       provider: 'Google',
-      modelId: 'gemini-1.5-pro',
-      endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent',
+      modelId: GOOGLE_DEFAULT_MODEL_ID,
+      endpoint: GOOGLE_GENERATE_CONTENT_ENDPOINT,
       apiKey: '',
       temperature: 0.2,
       maxTokens: 4096,
@@ -137,7 +162,8 @@ export const savePromptVersion = async (promptData) => {
         description: promptData.commitMessage || 'Saved draft version',
         createdAt: new Date().toISOString(),
         systemPrompt: promptData.systemPrompt || "",
-        userPrompt: promptData.userPrompt || ""
+        userPrompt: promptData.userPrompt || "",
+        selectedModelId: promptData.selectedModelId || ""
       };
       
       versions.unshift(newEntry);
@@ -357,17 +383,18 @@ export const saveModel = async (modelData) => {
     setTimeout(() => {
       const models = loadModelsDb();
       let savedModel;
+      const normalizedModelData = normalizeModelConfig(modelData);
       if (modelData.id) {
         const index = models.findIndex(m => m.id === modelData.id);
         if (index > -1) {
-          models[index] = { ...models[index], ...modelData };
+          models[index] = { ...models[index], ...normalizedModelData };
           savedModel = models[index];
         }
       }
       if (!savedModel) {
         savedModel = {
           id: `m${Date.now()}`,
-          ...modelData
+          ...normalizedModelData
         };
         models.push(savedModel);
       }

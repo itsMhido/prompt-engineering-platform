@@ -1,13 +1,90 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Box, Database, TerminalSquare, FlaskConical, Target,
-  Play, Plus, Settings2, GitCommit, Copy, CheckCircle2,
+  Play, Plus, Settings2, Copy, CheckCircle2,
   AlertTriangle, Clock, Activity, HardDrive, ChevronRight,
   Trash2, Edit2, Eye, EyeOff
 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { savePromptVersion, loadVersionHistory, callModel, loadModels, saveModel, validateModel, deleteModel } from './mockApi';
+
+const PROMPT_DRAFT_KEY = 'pe_draft';
+
+function readLocalStorageJSON(key, fallback) {
+  try {
+    const data = localStorage.getItem(key);
+    if (!data) return fallback;
+    const parsed = JSON.parse(data);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeLocalStorageJSON(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function loadPromptDraft() {
+  const draft = readLocalStorageJSON(PROMPT_DRAFT_KEY, null);
+  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) {
+    return null;
+  }
+
+  return {
+    systemPrompt: typeof draft.systemPrompt === 'string' ? draft.systemPrompt : '',
+    userPrompt: typeof draft.userPrompt === 'string' ? draft.userPrompt : '',
+    variables: draft.variables && typeof draft.variables === 'object' && !Array.isArray(draft.variables) ? draft.variables : {},
+    selectedModelId: typeof draft.selectedModelId === 'string' ? draft.selectedModelId : '',
+    activeVersion: typeof draft.activeVersion === 'string' ? draft.activeVersion : '',
+    savedAt: typeof draft.savedAt === 'string' ? draft.savedAt : null
+  };
+}
+
+function getVariableNames(prompt) {
+  if (!prompt) return [];
+  return Array.from(new Set(
+    Array.from(prompt.matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g)).map(match => match[1])
+  ));
+}
+
+function syncVariablesWithPrompt(prompt, previousVariables = {}) {
+  return getVariableNames(prompt).reduce((acc, variableName) => {
+    acc[variableName] = previousVariables[variableName] || "";
+    return acc;
+  }, {});
+}
+
+function timeAgo(dateString) {
+  if (!dateString) return '';
+  const seconds = Math.floor((new Date() - new Date(dateString)) / 1000);
+  let interval = seconds / 31536000;
+  if (interval > 1) return `${Math.floor(interval)} years ago`;
+  interval = seconds / 2592000;
+  if (interval > 1) return `${Math.floor(interval)} months ago`;
+  interval = seconds / 86400;
+  if (interval > 1) return `${Math.floor(interval)} days ago`;
+  interval = seconds / 3600;
+  if (interval > 1) return `${Math.floor(interval)} hours ago`;
+  interval = seconds / 60;
+  if (interval > 1) return `${Math.floor(interval)} min ago`;
+  return 'just now';
+}
+
+function getComparableVersionState(source, fallbackSelectedModelId = '') {
+  const hasSelectedModelId = source && Object.prototype.hasOwnProperty.call(source, 'selectedModelId');
+  return JSON.stringify({
+    systemPrompt: source?.systemPrompt || '',
+    userPrompt: source?.userPrompt || '',
+    selectedModelId: hasSelectedModelId ? (source.selectedModelId || '') : fallbackSelectedModelId
+  });
+}
 
 // Util for tailwind classes
 function cn(...inputs) {
@@ -19,7 +96,7 @@ function cn(...inputs) {
 const MOCK_MODELS = [
   { id: 'm1', name: 'gpt-4-turbo', provider: 'OpenAI', version: 'v1.0.2', temp: 0.7, tokens: 4096 },
   { id: 'm2', name: 'claude-3-opus', provider: 'Anthropic', version: 'v1.2.0', temp: 0.5, tokens: 8192 },
-  { id: 'm3', name: 'gemini-1.5-pro', provider: 'Google', version: 'v1.5.0', temp: 0.2, tokens: 1000000 },
+  { id: 'm3', name: 'gemini-2.5-flash', provider: 'Google', version: 'v2.5.0', temp: 0.2, tokens: 1048576 },
 ];
 
 const MOCK_EXPERIMENTS = [
@@ -138,24 +215,41 @@ function TopBar() {
 // ---- PROMPT STUDIO ----
 
 function PromptStudio() {
-  const [systemPrompt, setSystemPrompt] = useState("");
-  const [userPrompt, setUserPrompt] = useState("");
-  const [variables, setVariables] = useState({});
+  const initialDraftRef = useRef(loadPromptDraft());
+  const autosaveTimerRef = useRef(null);
+  const latestDraftRef = useRef('');
+  const latestEditorStateRef = useRef(initialDraftRef.current || null);
+  const saveInputRef = useRef(null);
+
+  const [systemPrompt, setSystemPrompt] = useState(initialDraftRef.current?.systemPrompt || "");
+  const [userPrompt, setUserPrompt] = useState(initialDraftRef.current?.userPrompt || "");
+  const [variables, setVariables] = useState(() => syncVariablesWithPrompt(
+    initialDraftRef.current?.userPrompt || "",
+    initialDraftRef.current?.variables || {}
+  ));
   const [isHoveringRun, setIsHoveringRun] = useState(false);
   const [output, setOutput] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
-  const [activeVersion, setActiveVersion] = useState('');
+  const [activeVersion, setActiveVersion] = useState(initialDraftRef.current?.activeVersion || '');
 
   const [history, setHistory] = useState([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [showSavedBadge, setShowSavedBadge] = useState(false);
   const [copiedJSON, setCopiedJSON] = useState(false);
   const [copiedOutput, setCopiedOutput] = useState(false);
   const [commitMessage, setCommitMessage] = useState('');
+  const [isSaveComposerOpen, setIsSaveComposerOpen] = useState(false);
+  const [pendingLoadVersion, setPendingLoadVersion] = useState(null);
+  const [draftSavedAt, setDraftSavedAt] = useState(initialDraftRef.current?.savedAt || null);
+  const [isAutosavePending, setIsAutosavePending] = useState(false);
+  const [draftStatusLabel, setDraftStatusLabel] = useState('');
+  const [statusTick, setStatusTick] = useState(Date.now());
+  const [versionNotice, setVersionNotice] = useState('');
+  const [variableResetNotice, setVariableResetNotice] = useState('');
+  const [isHydrated, setIsHydrated] = useState(false);
 
   const [models, setModels] = useState([]);
-  const [selectedModelId, setSelectedModelId] = useState('');
+  const [selectedModelId, setSelectedModelId] = useState(initialDraftRef.current?.selectedModelId || '');
 
   // Sync scroll between textarea and highlight layer
   const textAreaRef = useRef(null);
@@ -172,41 +266,183 @@ function PromptStudio() {
     loadVersionHistory('p1').then(data => {
       setHistory(data);
       setIsLoadingHistory(false);
+
+      if (initialDraftRef.current) {
+        setActiveVersion(initialDraftRef.current.activeVersion || data[0]?.version || '');
+        setIsHydrated(true);
+        return;
+      }
+
       if (data.length > 0) {
         const latest = data[0];
-        setActiveVersion(latest.version);
-        setSystemPrompt(latest.systemPrompt);
-        setUserPrompt(latest.userPrompt);
+        setActiveVersion(latest.version || '');
+        setSystemPrompt(latest.systemPrompt || "");
+        setUserPrompt(latest.userPrompt || "");
+        setVariables(syncVariablesWithPrompt(latest.userPrompt || "", {}));
       }
+
+      setIsHydrated(true);
     });
 
     loadModels().then(data => {
       setModels(data);
-      if (data.length > 0) setSelectedModelId(data[0].id);
+      setSelectedModelId(currentSelectedModelId => currentSelectedModelId || data[0]?.id || '');
     });
   }, []);
 
-  const handleSelectVersion = (versionId) => {
-    const v = history.find(h => h.version === versionId);
-    if (v) {
-      setActiveVersion(v.version);
-      setSystemPrompt(v.systemPrompt);
-      setUserPrompt(v.userPrompt);
+  useEffect(() => {
+    setVariables(prev => syncVariablesWithPrompt(userPrompt, prev));
+  }, [userPrompt]);
+
+  useEffect(() => {
+    latestEditorStateRef.current = {
+      systemPrompt,
+      userPrompt,
+      variables,
+      selectedModelId,
+      activeVersion
+    };
+  }, [systemPrompt, userPrompt, variables, selectedModelId, activeVersion]);
+
+  useEffect(() => {
+    if (!isHydrated) return;
+
+    const draftPayload = {
+      systemPrompt,
+      userPrompt,
+      variables,
+      selectedModelId,
+      activeVersion
+    };
+    const serializedDraft = JSON.stringify(draftPayload);
+
+    if (serializedDraft === latestDraftRef.current) {
+      setIsAutosavePending(false);
+      return;
+    }
+
+    setIsAutosavePending(true);
+    setDraftStatusLabel('');
+    clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = setTimeout(() => {
+      const savedAt = new Date().toISOString();
+      const didWrite = writeLocalStorageJSON(PROMPT_DRAFT_KEY, { ...draftPayload, savedAt });
+      if (didWrite) {
+        latestDraftRef.current = serializedDraft;
+        setDraftSavedAt(savedAt);
+        setStatusTick(Date.now());
+      }
+      setIsAutosavePending(false);
+    }, 800);
+
+    return () => clearTimeout(autosaveTimerRef.current);
+  }, [systemPrompt, userPrompt, variables, selectedModelId, activeVersion, isHydrated]);
+
+  useEffect(() => {
+    if (!draftSavedAt) return undefined;
+    const interval = setInterval(() => setStatusTick(Date.now()), 30000);
+    return () => clearInterval(interval);
+  }, [draftSavedAt]);
+
+  useEffect(() => {
+    if (!variableResetNotice) return undefined;
+    const timeout = setTimeout(() => setVariableResetNotice(''), 3000);
+    return () => clearTimeout(timeout);
+  }, [variableResetNotice]);
+
+  useEffect(() => {
+    if (isSaveComposerOpen && saveInputRef.current) {
+      saveInputRef.current.focus();
+      saveInputRef.current.select();
+    }
+  }, [isSaveComposerOpen]);
+
+  useEffect(() => () => {
+    clearTimeout(autosaveTimerRef.current);
+    if (!latestEditorStateRef.current) return;
+    const serializedDraft = JSON.stringify(latestEditorStateRef.current);
+    if (serializedDraft === latestDraftRef.current) return;
+    const savedAt = new Date().toISOString();
+    if (writeLocalStorageJSON(PROMPT_DRAFT_KEY, { ...latestEditorStateRef.current, savedAt })) {
+      latestDraftRef.current = serializedDraft;
+    }
+  }, []);
+
+  const latestVersion = history[0] || null;
+  const latestComparableState = latestVersion
+    ? getComparableVersionState(latestVersion, selectedModelId)
+    : null;
+  const currentDraftComparableState = getComparableVersionState({ systemPrompt, userPrompt, selectedModelId });
+  const hasVersionChanges = latestVersion
+    ? currentDraftComparableState !== latestComparableState
+    : Boolean(systemPrompt || userPrompt || selectedModelId);
+  const autosaveText = isAutosavePending
+    ? 'Saving...'
+    : draftStatusLabel
+      ? draftStatusLabel
+      : draftSavedAt
+        ? `Draft saved ${timeAgo(draftSavedAt)}`
+        : '';
+  const showSavedBadge = false;
+  void statusTick;
+
+  const persistDraftImmediately = (nextDraft, statusLabel = '') => {
+    clearTimeout(autosaveTimerRef.current);
+    const serializedDraft = JSON.stringify(nextDraft);
+    const savedAt = new Date().toISOString();
+    const didWrite = writeLocalStorageJSON(PROMPT_DRAFT_KEY, { ...nextDraft, savedAt });
+    if (didWrite) {
+      latestDraftRef.current = serializedDraft;
+      setDraftSavedAt(savedAt);
+      setStatusTick(Date.now());
+      setDraftStatusLabel(statusLabel);
+    }
+    setIsAutosavePending(false);
+  };
+
+  const markUserEdit = () => {
+    setPendingLoadVersion(null);
+    setDraftStatusLabel('');
+    if (versionNotice) {
+      setVersionNotice('');
     }
   };
 
-  const variableRegex = /\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g;
+  const applyVersion = (versionToLoad) => {
+    const nextSelectedModelId = Object.prototype.hasOwnProperty.call(versionToLoad, 'selectedModelId')
+      ? (versionToLoad.selectedModelId || '')
+      : selectedModelId;
+    const nextVariables = syncVariablesWithPrompt(versionToLoad.userPrompt || "", {});
 
-  useEffect(() => {
-    const matches = Array.from(userPrompt.matchAll(variableRegex));
-    setVariables(prev => {
-      const newVars = {};
-      matches.forEach(match => {
-        newVars[match[1]] = prev[match[1]] || "";
-      });
-      return newVars;
+    setSystemPrompt(versionToLoad.systemPrompt || "");
+    setUserPrompt(versionToLoad.userPrompt || "");
+    setVariables(nextVariables);
+    setSelectedModelId(nextSelectedModelId);
+    setActiveVersion(versionToLoad.version);
+    setPendingLoadVersion(null);
+    setVersionNotice(`Viewing ${versionToLoad.version} — editing creates a new draft`);
+    setVariableResetNotice(`Variable values cleared — loading version ${versionToLoad.version}`);
+
+    persistDraftImmediately({
+      systemPrompt: versionToLoad.systemPrompt || "",
+      userPrompt: versionToLoad.userPrompt || "",
+      variables: nextVariables,
+      selectedModelId: nextSelectedModelId,
+      activeVersion: versionToLoad.version
     });
-  }, [userPrompt]);
+  };
+
+  const handleRequestLoadVersion = (versionId) => {
+    const versionToLoad = history.find(version => version.version === versionId);
+    if (!versionToLoad) return;
+
+    if (!hasVersionChanges) {
+      applyVersion(versionToLoad);
+      return;
+    }
+
+    setPendingLoadVersion(versionId);
+  };
 
   const handleRun = async () => {
     if (!selectedModelId) return;
@@ -219,10 +455,9 @@ function PromptStudio() {
         setIsRunning(false);
         return;
       }
-      // Interpolate variables
       let interpolatedUserMessage = userPrompt;
       Object.keys(variables).forEach(key => {
-        const value = variables[key] || `{${key}}`; // leave as-is if empty
+        const value = variables[key] || `{${key}}`;
         interpolatedUserMessage = interpolatedUserMessage.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
       });
       const result = await callModel(modelObj, systemPrompt, interpolatedUserMessage);
@@ -239,24 +474,34 @@ function PromptStudio() {
   };
 
   const handleSave = async () => {
+    if (!hasVersionChanges || isSaving) return;
     setIsSaving(true);
-    await savePromptVersion({ 
-      id: 'p1', 
-      systemPrompt, 
+    const newVersion = await savePromptVersion({
+      id: 'p1',
+      systemPrompt,
       userPrompt,
-      commitMessage: commitMessage || 'Saved draft version'
+      selectedModelId,
+      commitMessage: commitMessage.trim() || 'No description'
     });
     const updatedHistory = await loadVersionHistory('p1');
     setHistory(updatedHistory);
-    if (updatedHistory.length > 0) setActiveVersion(updatedHistory[0].version);
+    setActiveVersion(newVersion.version);
+    persistDraftImmediately({
+      systemPrompt,
+      userPrompt,
+      variables,
+      selectedModelId,
+      activeVersion: newVersion.version
+    }, `Saved as ${newVersion.version}`);
     setIsSaving(false);
-    setShowSavedBadge(true);
     setCommitMessage('');
-    setTimeout(() => setShowSavedBadge(false), 2000);
+    setIsSaveComposerOpen(false);
+    setPendingLoadVersion(null);
+    setVersionNotice('');
   };
 
   const handleCopyJSON = () => {
-    const payload = JSON.stringify({ systemPrompt, userPrompt, variables }, null, 2);
+    const payload = JSON.stringify({ systemPrompt, userPrompt, variables, selectedModelId }, null, 2);
     navigator.clipboard.writeText(payload);
     setCopiedJSON(true);
     setTimeout(() => setCopiedJSON(false), 2000);
@@ -268,6 +513,26 @@ function PromptStudio() {
       setCopiedOutput(true);
       setTimeout(() => setCopiedOutput(false), 2000);
     }
+  };
+
+  const handleSystemPromptChange = (event) => {
+    markUserEdit();
+    setSystemPrompt(event.target.value);
+  };
+
+  const handleUserPromptChange = (event) => {
+    markUserEdit();
+    setUserPrompt(event.target.value);
+  };
+
+  const handleVariableChange = (variableName, value) => {
+    markUserEdit();
+    setVariables(prev => ({ ...prev, [variableName]: value }));
+  };
+
+  const handleModelChange = (event) => {
+    markUserEdit();
+    setSelectedModelId(event.target.value);
   };
 
   // Helper to render prompt with highlighted variables
@@ -297,7 +562,7 @@ function PromptStudio() {
   return (
     <div className="flex h-full animate-in fade-in duration-300">
       {/* Version Sidebar */}
-      <div className="w-48 border-r border-border bg-panel/30 flex flex-col pt-4">
+      <div className="w-56 border-r border-border bg-panel/30 flex flex-col pt-4">
         <div className="px-4 mb-4 text-xs font-mono text-text-muted uppercase tracking-wider">History</div>
         <div className="flex-1 overflow-y-auto px-2 space-y-2">
           {isLoadingHistory ? (
@@ -306,41 +571,146 @@ function PromptStudio() {
                 <div key={i} className="h-14 bg-panel rounded-md" />
               ))}
             </div>
-          ) : history.map(v => (
-            <button
-              key={v.version}
-              onClick={() => handleSelectVersion(v.version)}
-              className={cn(
-                "w-full text-left p-3 rounded-md transition-all border",
-                activeVersion === v.version
-                  ? "bg-primary/5 border-primary/30"
-                  : "bg-transparent border-transparent hover:bg-white/5"
-              )}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className={cn(
-                  "font-mono text-xs px-2 py-0.5 rounded border",
-                  activeVersion === v.version
-                    ? "bg-primary/20 text-primary border-primary/50"
-                    : "bg-panel text-text-muted border-border"
-                )}>{v.label}</span>
-                {activeVersion === v.version && <GitCommit size={14} className="text-primary" />}
+          ) : history.map((version, index) => (
+            <div key={version.version} className="group">
+              <div
+                className={cn(
+                  "rounded-md border border-transparent border-l-2 p-3 transition-all",
+                  activeVersion === version.version
+                    ? "bg-primary/10 border-primary/30 border-l-primary"
+                    : "hover:bg-white/5 border-l-transparent"
+                )}
+              >
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className={cn(
+                    "font-mono text-xs px-2 py-0.5 rounded border",
+                    activeVersion === version.version
+                      ? "bg-primary/15 text-primary border-primary/40"
+                      : "bg-panel text-text-muted border-border"
+                  )}>{version.label}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleRequestLoadVersion(version.version)}
+                    className="text-[10px] uppercase tracking-wider text-text-muted opacity-0 group-hover:opacity-100 transition-opacity hover:text-text-main"
+                  >
+                    Load
+                  </button>
+                </div>
+                <div className="text-xs text-text-muted truncate">{version.description || 'No description'}</div>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <div className="text-[10px] text-text-muted/60">{version.createdAtDisplay}</div>
+                  {index === 0 && hasVersionChanges && (
+                    <div className="text-[10px] text-primary flex items-center gap-1">
+                      <span>●</span>
+                      <span>Unsaved changes</span>
+                    </div>
+                  )}
+                </div>
               </div>
-              <div className="text-xs text-text-muted truncate mt-1">{v.description}</div>
-              <div className="text-[10px] text-text-muted/60 mt-1">{v.createdAtDisplay}</div>
-            </button>
+              {pendingLoadVersion === version.version && (
+                <div className="mx-1 mt-2 rounded-md border border-primary/20 bg-primary/10 p-3 text-xs text-text-muted">
+                  <div className="mb-2">Load {version.version}? Your unsaved draft will be replaced.</div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => applyVersion(version)}
+                      className="px-2.5 py-1 rounded bg-primary text-panel font-medium hover:bg-primary/90 transition-colors"
+                    >
+                      Load version
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPendingLoadVersion(null)}
+                      className="px-2.5 py-1 rounded border border-border text-text-muted hover:text-text-main hover:border-primary/40 transition-colors"
+                    >
+                      Keep editing
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       </div>
 
       {/* Editor Pane */}
       <div className="flex-1 flex flex-col border-r border-border min-w-0">
-        <div className="p-4 border-b border-border flex justify-between items-center gap-4 bg-panel/50">
-          <div className="flex items-center gap-2">
+        <div className="p-4 border-b border-border bg-panel/50 space-y-3">
+          <div className="flex justify-between items-center gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex items-center gap-2">
+                <TerminalSquare size={18} className="text-primary" />
+                <span className="font-medium">Editor</span>
+              </div>
+              {autosaveText && <span className="text-xs text-text-muted">{autosaveText}</span>}
+            </div>
+            <div className="flex items-center gap-3">
+              <button onClick={handleCopyJSON} className="text-xs flex items-center gap-1 text-text-muted hover:text-text-main transition-colors">
+                {copiedJSON ? <CheckCircle2 size={14} className="text-primary" /> : <Copy size={14} />}
+                {copiedJSON ? 'Copied!' : 'Copy JSON'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsSaveComposerOpen(true)}
+                disabled={!hasVersionChanges || isSaving}
+                title={!hasVersionChanges ? 'No changes since last version' : 'Save as new version'}
+                className="text-xs flex items-center gap-1 text-text-muted hover:text-text-main transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Database size={14} />
+                {isSaving ? 'Saving...' : 'Save as new version'}
+              </button>
+            </div>
+          </div>
+          {(versionNotice || variableResetNotice || isSaveComposerOpen) && (
+            <div className="flex flex-col gap-2">
+              {versionNotice && <div className="text-xs text-primary">{versionNotice}</div>}
+              {variableResetNotice && <div className="text-xs text-text-muted animate-in fade-in duration-200">{variableResetNotice}</div>}
+              {isSaveComposerOpen && (
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={saveInputRef}
+                    type="text"
+                    value={commitMessage}
+                    onChange={(e) => setCommitMessage(e.target.value)}
+                    placeholder="Describe what changed..."
+                    className="flex-1 max-w-sm bg-background border border-border rounded px-3 py-1.5 text-xs focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/50 text-text-main placeholder-text-muted"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !isSaving) {
+                        handleSave();
+                      }
+                      if (e.key === 'Escape') {
+                        setIsSaveComposerOpen(false);
+                        setCommitMessage('');
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    disabled={isSaving}
+                    className="px-3 py-1.5 rounded bg-primary text-panel text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+                  >
+                    {isSaving ? 'Saving...' : 'Save'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsSaveComposerOpen(false);
+                      setCommitMessage('');
+                    }}
+                    className="text-xs text-text-muted hover:text-text-main transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          <div className="hidden">
             <TerminalSquare size={18} className="text-primary" />
             <span className="font-medium">Editor</span>
           </div>
-          <div className="flex items-center gap-3 flex-1">
+          <div className="hidden">
             <input
               type="text"
               value={commitMessage}
@@ -350,7 +720,7 @@ function PromptStudio() {
               onKeyDown={(e) => { if (e.key === 'Enter' && !isSaving) handleSave(); }}
             />
           </div>
-          <div className="flex items-center gap-3">
+          <div className="hidden">
             {showSavedBadge && (
               <span className="text-xs text-primary font-medium animate-in fade-in zoom-in duration-200">
                 Saved ✓
@@ -375,7 +745,7 @@ function PromptStudio() {
             <textarea
               className="w-full bg-panel border border-border rounded-md p-3 text-text-main font-sans resize-none focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/50 transition-all min-h-[100px]"
               value={systemPrompt}
-              onChange={(e) => setSystemPrompt(e.target.value)}
+              onChange={handleSystemPromptChange}
             />
           </div>
 
@@ -397,7 +767,7 @@ function PromptStudio() {
                 className="absolute inset-0 w-full h-full p-3 font-sans resize-none focus:outline-none bg-transparent caret-primary scrollbar-hide text-transparent"
                 style={{ color: 'transparent', WebkitTextFillColor: 'transparent' }}
                 value={userPrompt}
-                onChange={(e) => setUserPrompt(e.target.value)}
+                onChange={handleUserPromptChange}
               />
             </div>
             <div className="text-xs text-text-muted">Use <span className="font-mono text-primary bg-primary/10 px-1 rounded">{'{variable}'}</span> syntax to interpolate values.</div>
@@ -416,7 +786,7 @@ function PromptStudio() {
                     <input
                       type="text"
                       value={variables[varName]}
-                      onChange={(e) => setVariables({ ...variables, [varName]: e.target.value })}
+                      onChange={(e) => handleVariableChange(varName, e.target.value)}
                       className="w-full bg-background border border-border rounded px-3 py-1.5 focus:outline-none focus:border-primary/50 text-sm"
                       placeholder={`Value for ${varName}`}
                     />
@@ -436,7 +806,7 @@ function PromptStudio() {
             <span className="font-medium hidden sm:block">Output Preview</span>
             <select
               value={selectedModelId}
-              onChange={(e) => setSelectedModelId(e.target.value)}
+              onChange={handleModelChange}
               className="bg-background border border-border rounded px-3 py-1 text-xs font-medium focus:outline-none focus:border-primary/50 text-text-main max-w-[200px] truncate"
             >
               {models.filter(m => m.status === 'active').map(m => (
@@ -589,7 +959,7 @@ const PROVIDER_DEFAULTS = {
   },
   Google: {
     endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
-    modelId: 'gemini-1.5-pro'
+    modelId: 'gemini-2.5-flash'
   },
   Mistral: {
     endpoint: 'https://api.mistral.ai/v1/chat/completions',
