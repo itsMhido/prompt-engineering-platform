@@ -994,6 +994,27 @@ function ExperimentsView() {
     });
   }, []);
 
+  // Lock body scroll when drawer is open
+  useEffect(() => {
+    if (detailedExperiment) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => { document.body.style.overflow = ''; };
+  }, [detailedExperiment]);
+
+  // ESC key closes drawer
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && detailedExperiment) {
+        setDetailedExperiment(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [detailedExperiment]);
+
   const isFiltered = searchText || filterModel || filterVersion || filterStatus !== '' || filterDateRange !== 'all';
 
   const getDateRangeFilter = () => {
@@ -1140,18 +1161,27 @@ function ExperimentsView() {
     const exp = detailedExperiment;
 
     return (
-      <div className="fixed inset-0 z-50 flex">
-        <div className="absolute inset-0 bg-black/50" onClick={() => setDetailedExperiment(null)} />
-        <div className="ml-auto w-full max-w-2xl bg-panel border-l border-border flex flex-col animate-in slide-in-from-right duration-300">
-          <div className="p-6 border-b border-border flex justify-between items-start">
+      <>
+        {/* Backdrop — sibling of drawer, NEVER a parent wrapper */}
+        <div
+          className="fixed inset-0 bg-black/40"
+          style={{ zIndex: 40 }}
+          onClick={() => setDetailedExperiment(null)}
+        />
+        {/* Drawer — sits on top with its own fixed position */}
+        <div
+          className="fixed top-0 right-0 h-screen w-full max-w-2xl bg-panel border-l border-border flex flex-col animate-in slide-in-from-right duration-300"
+          style={{ zIndex: 50, overflowY: 'auto', overflowX: 'hidden' }}
+        >
+          <div className="p-6 border-b border-border flex justify-between items-start sticky top-0 bg-panel z-10">
             <div className="flex items-center gap-3">
               <span className="font-mono text-xs px-2 py-0.5 rounded border bg-primary/10 text-primary border-primary/30">{exp.promptVersion}</span>
               <span className="text-sm font-medium text-text-muted">{exp.model} · {exp.provider}</span>
             </div>
-            <button onClick={() => setDetailedExperiment(null)} className="text-text-muted hover:text-text-main">✕</button>
+            <button onClick={() => setDetailedExperiment(null)} className="text-text-muted hover:text-text-main text-lg leading-none">✕</button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <div className="p-6 space-y-6">
             <div className="space-y-4">
               <h3 className="text-sm font-bold uppercase tracking-wider text-primary">System Prompt</h3>
               <div className="bg-background p-4 rounded border border-border text-text-main text-sm font-mono whitespace-pre-wrap break-words">{exp.systemPrompt}</div>
@@ -1212,12 +1242,12 @@ function ExperimentsView() {
                   <p className="text-red-300 text-sm font-mono">{exp.errorMessage}</p>
                 </div>
               ) : (
-                <div className="bg-background p-4 rounded border border-border text-text-main text-sm font-mono whitespace-pre-wrap break-words max-h-64 overflow-y-auto">{exp.output}</div>
+                <div className="bg-background p-4 rounded border border-border text-text-main text-sm font-mono whitespace-pre-wrap break-words">{exp.output}</div>
               )}
             </div>
           </div>
         </div>
-      </div>
+      </>
     );
   };
 
@@ -1319,8 +1349,21 @@ function ExperimentsView() {
               </thead>
               <tbody className="divide-y divide-border">
                 {filteredExperiments.map(exp => (
-                  <tr key={exp.id} className="hover:bg-white/[0.02] transition-colors group cursor-pointer">
-                    <td className="px-4 py-4" onClick={() => handleRowSelect(exp.id)}><input type="checkbox" checked={selectedRows.has(exp.id)} onChange={() => handleRowSelect(exp.id)} /></td>
+                  <tr
+                    key={exp.id}
+                    className="hover:bg-white/[0.02] transition-colors group cursor-pointer"
+                    onClick={() => setDetailedExperiment(exp)}
+                  >
+                    <td
+                      className="px-4 py-4"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedRows.has(exp.id)}
+                        onChange={() => handleRowSelect(exp.id)}
+                      />
+                    </td>
                     <td className="px-4 py-4"><span className="font-mono text-xs px-2 py-0.5 rounded border bg-primary/10 text-primary border-primary/30">{exp.promptVersion}</span></td>
                     <td className="px-4 py-4 text-sm truncate">{exp.promptName}</td>
                     <td className="px-4 py-4 text-sm">{exp.provider}</td>
@@ -1338,10 +1381,61 @@ function ExperimentsView() {
                       )}
                     </td>
                     <td className="px-4 py-4 text-xs text-text-muted">{timeAgoShort(exp.timestamp)}</td>
-                    <td className="px-4 py-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => setDetailedExperiment(exp)} className="text-primary hover:text-primary/80 text-xs">👁</button>
-                      <button onClick={() => navigator.clipboard.writeText(JSON.stringify({systemPrompt: exp.systemPrompt, userTemplate: exp.userTemplate}, null, 2))} className="text-primary hover:text-primary/80 text-xs">📋</button>
-                      <button onClick={() => handleDeleteExperiment(exp.id)} className="text-red-400 hover:text-red-300 text-xs">🗑</button>
+                    <td className="px-4 py-4">
+                      <div
+                        className="flex items-center gap-2 opacity-0 group-hover:opacity-100"
+                        style={{ transition: 'opacity 150ms' }}
+                      >
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const json = JSON.stringify(exp, null, 2);
+                            const blob = new Blob([json], { type: 'application/json' });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `experiment-${exp.id}.json`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                          style={{
+                            minHeight: '32px',
+                            paddingLeft: '12px',
+                            paddingRight: '12px',
+                            fontSize: '12px',
+                            border: '1px solid #2a2a35',
+                            borderRadius: '4px',
+                            background: 'transparent',
+                            color: '#94a3b8',
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          Export JSON
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteExperiment(exp.id);
+                          }}
+                          style={{
+                            minHeight: '32px',
+                            paddingLeft: '12px',
+                            paddingRight: '12px',
+                            fontSize: '12px',
+                            border: '1px solid rgba(239,68,68,0.35)',
+                            borderRadius: '4px',
+                            background: 'transparent',
+                            color: 'rgb(248,113,113)',
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap'
+                          }}
+                          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(239,68,68,0.1)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
