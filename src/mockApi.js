@@ -1,7 +1,15 @@
 const MODELS_KEY = 'pe_models';
 const PROMPTS_KEY = 'pe_prompts';
+const EXPERIMENTS_KEY = 'pe_experiments';
 const GOOGLE_GENERATE_CONTENT_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent';
 const GOOGLE_DEFAULT_MODEL_ID = 'gemini-2.5-flash';
+
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
 
 function normalizeModelConfig(model) {
   if (model?.provider !== 'Google') {
@@ -188,6 +196,111 @@ export const loadVersionHistory = async (promptId) => {
   });
 };
 
+// ---- EXPERIMENTS DB ----
+
+function loadExperimentsDb() {
+  const data = localStorage.getItem(EXPERIMENTS_KEY);
+  if (!data) return [];
+  try {
+    const parsed = JSON.parse(data);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveExperimentsDb(data) {
+  try {
+    localStorage.setItem(EXPERIMENTS_KEY, JSON.stringify(data));
+  } catch (e) {
+    console.error('Failed to save experiments:', e);
+  }
+}
+
+export const saveExperiment = async (experimentData) => {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      const experiments = loadExperimentsDb();
+      const experiment = {
+        id: generateUUID(),
+        ...experimentData,
+        timestamp: new Date().toISOString()
+      };
+      experiments.unshift(experiment);
+      saveExperimentsDb(experiments);
+      resolve(experiment);
+    }, 100);
+  });
+};
+
+export const loadExperiments = async () => {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      const experiments = loadExperimentsDb();
+      resolve(experiments);
+    }, 200);
+  });
+};
+
+export const deleteExperiment = async (experimentId) => {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      const experiments = loadExperimentsDb();
+      const filtered = experiments.filter(e => e.id !== experimentId);
+      saveExperimentsDb(filtered);
+      resolve(true);
+    }, 100);
+  });
+};
+
+export const updateExperimentScore = async (experimentId, score) => {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      const experiments = loadExperimentsDb();
+      const idx = experiments.findIndex(e => e.id === experimentId);
+      if (idx > -1) {
+        experiments[idx].score = Math.max(0, Math.min(100, score));
+        saveExperimentsDb(experiments);
+        resolve(experiments[idx]);
+      } else {
+        resolve(null);
+      }
+    }, 100);
+  });
+};
+
+export const updateExperimentNotes = async (experimentId, notes) => {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      const experiments = loadExperimentsDb();
+      const idx = experiments.findIndex(e => e.id === experimentId);
+      if (idx > -1) {
+        experiments[idx].notes = notes;
+        saveExperimentsDb(experiments);
+        resolve(experiments[idx]);
+      } else {
+        resolve(null);
+      }
+    }, 100);
+  });
+};
+
+export const updateExperimentTags = async (experimentId, tags) => {
+  return new Promise(resolve => {
+    setTimeout(() => {
+      const experiments = loadExperimentsDb();
+      const idx = experiments.findIndex(e => e.id === experimentId);
+      if (idx > -1) {
+        experiments[idx].tags = tags;
+        saveExperimentsDb(experiments);
+        resolve(experiments[idx]);
+      } else {
+        resolve(null);
+      }
+    }, 100);
+  });
+};
+
 export const callModel = async (model, systemPrompt, userMessage) => {
   const startTime = Date.now();
 
@@ -225,6 +338,7 @@ export const callModel = async (model, systemPrompt, userMessage) => {
         result = {
           text: anthropicData.content[0]?.text || '',
           tokens: { input: anthropicData.usage?.input_tokens || 0, output: anthropicData.usage?.output_tokens || 0, total: (anthropicData.usage?.input_tokens || 0) + (anthropicData.usage?.output_tokens || 0) },
+          latencyMs: latency,
           latency: `${latency}ms`,
           cost: estimateCost(model.provider, anthropicData.usage?.input_tokens || 0, anthropicData.usage?.output_tokens || 0)
         };
@@ -260,6 +374,7 @@ export const callModel = async (model, systemPrompt, userMessage) => {
         result = {
           text: openaiData.choices[0]?.message?.content || '',
           tokens: { input: openaiData.usage?.prompt_tokens || 0, output: openaiData.usage?.completion_tokens || 0, total: openaiData.usage?.total_tokens || 0 },
+          latencyMs: latency,
           latency: `${latency}ms`,
           cost: estimateCost(model.provider, openaiData.usage?.prompt_tokens || 0, openaiData.usage?.completion_tokens || 0)
         };
@@ -290,6 +405,7 @@ export const callModel = async (model, systemPrompt, userMessage) => {
         result = {
           text: googleData.candidates[0]?.content?.parts[0]?.text || '',
           tokens: { input: googleData.usageMetadata?.promptTokenCount || 0, output: googleData.usageMetadata?.candidatesTokenCount || 0, total: (googleData.usageMetadata?.promptTokenCount || 0) + (googleData.usageMetadata?.candidatesTokenCount || 0) },
+          latencyMs: latency,
           latency: `${latency}ms`,
           cost: estimateCost(model.provider, googleData.usageMetadata?.promptTokenCount || 0, googleData.usageMetadata?.candidatesTokenCount || 0)
         };
@@ -324,8 +440,9 @@ export const callModel = async (model, systemPrompt, userMessage) => {
         result = {
           text: customData.choices?.[0]?.message?.content || customData.content?.[0]?.text || '',
           tokens: { input: customData.usage?.prompt_tokens || customData.usage?.input_tokens || 0, output: customData.usage?.completion_tokens || customData.usage?.output_tokens || 0, total: customData.usage?.total_tokens || 0 },
+          latencyMs: latency,
           latency: `${latency}ms`,
-          cost: '~$0.00' // Unknown for custom
+          cost: '~$0.00'
         };
         break;
 
@@ -356,18 +473,6 @@ function estimateCost(provider, inputTokens, outputTokens) {
   return `~$${cost.toFixed(4)}`;
 }
 
-export const loadExperiments = async () => {
-    return new Promise(resolve => {
-        setTimeout(() => {
-            const db = loadDb();
-            const mapped = db.experiments.map(e => ({
-                ...e,
-                dateDisplay: timeAgo(e.date)
-            }));
-            resolve(mapped);
-        }, 300);
-    });
-};
 
 export const loadModels = async () => {
   return new Promise(resolve => {
