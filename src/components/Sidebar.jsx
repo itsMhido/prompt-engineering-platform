@@ -1,14 +1,14 @@
 import React from 'react';
 import {
-  Box, Database, TerminalSquare, FlaskConical, Target, Settings2
+  Box, Database, FileText, FlaskConical, Target, Settings2
 } from 'lucide-react';
 import { cn } from '../utils/helpers';
 
-export default function Sidebar({ activeTab, setActiveTab }) {
+export default function Sidebar({ currentView, setCurrentView }) {
   const navItems = [
     { id: 'models', label: 'Models', icon: Box },
     { id: 'datasets', label: 'Datasets', icon: Database },
-    { id: 'prompt-studio', label: 'Prompt Studio', icon: TerminalSquare },
+    { id: 'prompts', label: 'Prompts', icon: FileText },
     { id: 'experiments', label: 'Experiments', icon: FlaskConical },
     { id: 'evaluations', label: 'Evaluations', icon: Target },
   ];
@@ -25,11 +25,11 @@ export default function Sidebar({ activeTab, setActiveTab }) {
       <nav className="flex-1 px-4 space-y-1">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const isActive = activeTab === item.id;
+          const isActive = currentView.page === item.id;
           return (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => setCurrentView({ page: item.id })}
               className={cn(
                 "w-full flex items-center gap-3 px-3 py-2.5 rounded-md transition-all duration-200 group text-left",
                 isActive

@@ -24,6 +24,7 @@ function ExperimentsView() {
   const [searchText, setSearchText] = useState('');
   const [filterModel, setFilterModel] = useState('');
   const [filterVersion, setFilterVersion] = useState('');
+  const [filterPrompt, setFilterPrompt] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterDateRange, setFilterDateRange] = useState('all');
   const [sortField, setSortField] = useState('timestamp');
@@ -65,7 +66,7 @@ function ExperimentsView() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [detailedExperiment]);
 
-  const isFiltered = searchText || filterModel || filterVersion || filterStatus !== '' || filterDateRange !== 'all';
+  const isFiltered = searchText || filterModel || filterVersion || filterPrompt || filterStatus !== '' || filterDateRange !== 'all';
 
   const getDateRangeFilter = () => {
     const now = new Date();
@@ -85,6 +86,7 @@ function ExperimentsView() {
     .filter(getDateRangeFilter())
     .filter(exp => !filterStatus || exp.status === filterStatus)
     .filter(exp => !filterModel || exp.provider === filterModel)
+    .filter(exp => !filterPrompt || exp.promptName === filterPrompt)
     .filter(exp => !filterVersion || exp.promptVersion === filterVersion)
     .filter(exp => {
       if (!searchText) return true;
@@ -112,6 +114,7 @@ function ExperimentsView() {
 
   const uniqueModels = Array.from(new Set(experiments.map(e => e.provider)));
   const uniqueVersions = Array.from(new Set(experiments.map(e => e.promptVersion)));
+  const uniquePrompts = Array.from(new Set(experiments.map(e => e.promptName).filter(Boolean)));
 
   const stats = {
     totalRuns: filteredExperiments.length,
@@ -122,8 +125,14 @@ function ExperimentsView() {
       ? Math.round(filteredExperiments.filter(e => e.score !== null).reduce((sum, e) => sum + e.score, 0) / filteredExperiments.filter(e => e.score !== null).length)
       : null,
     totalCost: filteredExperiments.reduce((sum, e) => {
-      const cost = parseFloat(e.costEstimate?.replace(/[^0-9.]/g, '') || 0);
-      return sum + cost;
+      const raw = e.costEstimate;
+      if (!raw) return sum;
+      if (typeof raw === 'number') return sum + raw;
+      if (typeof raw === 'string') {
+        const parsed = parseFloat(raw.replace(/[^0-9.]/g, ''));
+        return sum + (isNaN(parsed) ? 0 : parsed);
+      }
+      return sum;
     }, 0).toFixed(4)
   };
 
@@ -226,7 +235,8 @@ function ExperimentsView() {
           <div className="p-6 border-b border-border flex justify-between items-start sticky top-0 bg-panel z-10">
             <div className="flex items-center gap-3">
               <span className="font-mono text-xs px-2 py-0.5 rounded border bg-primary/10 text-primary border-primary/30">{exp.promptVersion}</span>
-              <span className="text-sm font-medium text-text-muted">{exp.model} Â· {exp.provider}</span>
+              <span className="text-xs px-2 py-0.5 rounded border bg-white/5 border-border text-text-main">{exp.promptName || 'Unknown Prompt'}</span>
+              <span className="text-sm font-medium text-text-muted">{exp.model} · {exp.provider}</span>
             </div>
             <button onClick={() => setDetailedExperiment(null)} className="text-text-muted hover:text-text-main text-lg leading-none">âœ•</button>
           </div>
@@ -330,8 +340,12 @@ function ExperimentsView() {
 
       {/* Filters */}
       <div className="bg-panel border border-border rounded-lg p-4 space-y-4">
-        <div className="grid grid-cols-5 gap-3">
+        <div className="grid grid-cols-6 gap-3">
           <input type="text" placeholder="Search..." value={searchText} onChange={(e) => setSearchText(e.target.value)} className="bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-primary/50 text-text-main" />
+          <select value={filterPrompt} onChange={(e) => setFilterPrompt(e.target.value)} className="bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-primary/50 text-text-main">
+            <option value="">All Prompts</option>
+            {uniquePrompts.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
           <select value={filterModel} onChange={(e) => setFilterModel(e.target.value)} className="bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-primary/50 text-text-main">
             <option value="">All Models</option>
             {uniqueModels.map(m => <option key={m} value={m}>{m}</option>)}
@@ -355,7 +369,7 @@ function ExperimentsView() {
         {isFiltered && (
           <div className="flex justify-between items-center text-sm">
             <span className="text-text-muted">Showing {filteredExperiments.length} of {experiments.length} experiments</span>
-            <button onClick={() => { setSearchText(''); setFilterModel(''); setFilterVersion(''); setFilterStatus(''); setFilterDateRange('all'); }} className="text-primary hover:underline text-xs">Clear filters</button>
+            <button onClick={() => { setSearchText(''); setFilterPrompt(''); setFilterModel(''); setFilterVersion(''); setFilterStatus(''); setFilterDateRange('all'); }} className="text-primary hover:underline text-xs">Clear filters</button>
           </div>
         )}
       </div>
@@ -414,7 +428,12 @@ function ExperimentsView() {
                         onChange={() => handleRowSelect(exp.id)}
                       />
                     </td>
-                    <td className="px-4 py-4"><span className="font-mono text-xs px-2 py-0.5 rounded border bg-primary/10 text-primary border-primary/30">{exp.promptVersion}</span></td>
+                    <td className="px-4 py-4">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs px-2 py-0.5 rounded border bg-white/5 border-border text-text-main">{exp.promptName || 'Unknown Prompt'}</span>
+                        <span className="font-mono text-xs px-2 py-0.5 rounded border bg-primary/10 text-primary border-primary/30">{exp.promptVersion}</span>
+                      </div>
+                    </td>
                     <td className="px-4 py-4 text-sm truncate">{exp.promptName}</td>
                     <td className="px-4 py-4 text-sm">{exp.provider}</td>
                     <td className={`px-4 py-4 font-mono text-xs ${getLatencyColor(exp.latencyMs)}`}>{exp.latencyMs}ms</td>
