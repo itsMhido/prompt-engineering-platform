@@ -1,10 +1,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer
 
 from app.core.config import settings
 from app.routers import auth, datasets, evaluations, experiments, inference, models, prompts
 
-app = FastAPI(title="Prompt Engineering Platform API", version="1.0.0")
+security = HTTPBearer()
+
+app = FastAPI(
+    title="Prompt Engineering Platform API", 
+    version="1.0.0",
+    swagger_ui_parameters={"persistAuthorization": True}
+)
 
 app.add_middleware(
     CORSMiddleware,

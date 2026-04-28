@@ -1,53 +1,55 @@
-from datetime import datetime
-from uuid import UUID
-
-from pydantic import BaseModel, ConfigDict, Field
-
+from typing import Optional
+from pydantic import BaseModel, ConfigDict
 
 def to_camel(value: str) -> str:
     first, *rest = value.split("_")
     return first + "".join(part.capitalize() for part in rest)
 
-
 class APIModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel, from_attributes=True)
 
-
-class ModelBase(APIModel):
+class ModelCreate(APIModel):
     name: str
     provider: str
-    model_id: str
+    modelId: str
     endpoint: str
+    apiKey: str
     temperature: float = 0.7
-    max_tokens: int = 1024
-    top_p: float = 1.0
-    stop_sequences: list[str] = Field(default_factory=list)
+    maxTokens: int = 1024
+    topP: float = 1.0
+    stopSequences: list[str] = []
     status: str = "active"
 
-
-class ModelCreate(ModelBase):
-    api_key: str
-
-
 class ModelUpdate(APIModel):
-    name: str | None = None
-    provider: str | None = None
-    model_id: str | None = None
-    endpoint: str | None = None
-    api_key: str | None = None
-    temperature: float | None = None
-    max_tokens: int | None = None
-    top_p: float | None = None
-    stop_sequences: list[str] | None = None
-    status: str | None = None
+    name: Optional[str] = None
+    provider: Optional[str] = None
+    modelId: Optional[str] = None
+    endpoint: Optional[str] = None
+    apiKey: Optional[str] = None
+    temperature: Optional[float] = None
+    maxTokens: Optional[int] = None
+    topP: Optional[float] = None
+    stopSequences: Optional[list[str]] = None
+    status: Optional[str] = None
 
+class ModelResponse(APIModel):
+    id: str
+    name: str
+    provider: str
+    modelId: str
+    endpoint: str
+    apiKey: str
+    temperature: float
+    maxTokens: int
+    topP: float
+    stopSequences: list[str]
+    status: str
+    createdAt: str
+    updatedAt: str
 
-class ModelRead(ModelBase):
-    id: UUID
-    api_key: str = "????????"
-    created_at: datetime
-    updated_at: datetime
-
-
-class ModelListResponse(APIModel):
-    models: list[ModelRead]
+class ValidateRequest(APIModel):
+    modelId: Optional[str] = None
+    provider: Optional[str] = None
+    apiKey: Optional[str] = None
+    endpoint: Optional[str] = None
+    providerModelId: Optional[str] = None
