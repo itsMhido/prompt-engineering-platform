@@ -6,6 +6,8 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "change-me"
     access_token_expire_minutes: int = 1440
     jwt_algorithm: str = "HS256"
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
     cors_origins: list[str] = ["http://localhost:5173"]
 
     model_config = SettingsConfigDict(

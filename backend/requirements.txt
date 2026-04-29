@@ -8,3 +8,4 @@ bcrypt<5
 pydantic-settings
 python-multipart
 email-validator
+supabase

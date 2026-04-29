@@ -12,7 +12,7 @@ Currently, two official plugins are available:
 This project now includes:
 
 - Frontend (`web`): React + Vite
-- Backend (`backend`): FastAPI REST API with JWT auth
+- Backend (`backend`): FastAPI REST API with Supabase auth
 - Database (`postgres`): PostgreSQL 16
 
 1. Build and start all services:
@@ -34,8 +34,8 @@ This project now includes:
 
 ### API Quick Start
 
-1. `POST /api/auth/register`
-2. `POST /api/auth/login` -> copy `access_token`
-3. Add header `Authorization: Bearer <token>`
-4. `POST /api/prompts` to create prompt + first version
-5. `GET /api/prompts` and `GET /api/prompts/{prompt_id}` to fetch prompts
+1. Authenticate in Supabase (frontend handles this automatically using `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`).
+2. Add header `Authorization: Bearer <supabase_access_token>`.
+3. `GET /api/auth/me` to verify the authenticated user.
+4. `POST /api/prompts` to create prompt + first version.
+5. `GET /api/prompts` and `GET /api/prompts/{prompt_id}` to fetch prompts.

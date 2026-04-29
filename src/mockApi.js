@@ -1,3 +1,5 @@
+import { supabase } from "./supabaseClient";
+
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000/api";
 const TOKEN_KEY = "pep_auth_token";
 const ACTIVE_PROMPT_ID_KEY = "pep_active_prompt_id";
@@ -44,39 +46,54 @@ async function apiRequest(path, options = {}) {
 }
 
 async function ensureAuthenticated() {
-  const existingToken = localStorage.getItem(TOKEN_KEY);
-  if (existingToken) {
-    try {
-      await apiRequest("/auth/me");
-      return existingToken;
-    } catch {
-      localStorage.removeItem(TOKEN_KEY);
-    }
+  const { data: existingSession } = await supabase.auth.getSession();
+  const sessionToken = existingSession.session?.access_token;
+  if (sessionToken) {
+    localStorage.setItem(TOKEN_KEY, sessionToken);
+    return sessionToken;
   }
 
-  try {
-    await apiRequest("/auth/register", {
-      method: "POST",
-      body: JSON.stringify({
-        email: DEMO_EMAIL,
-        password: DEMO_PASSWORD,
-        full_name: DEMO_NAME,
-      }),
-    });
-  } catch {
-    // User may already exist; proceed to login.
-  }
-
-  const loginResponse = await apiRequest("/auth/login", {
-    method: "POST",
-    body: JSON.stringify({
-      email: DEMO_EMAIL,
-      password: DEMO_PASSWORD,
-    }),
+  const signIn = await supabase.auth.signInWithPassword({
+    email: DEMO_EMAIL,
+    password: DEMO_PASSWORD,
   });
 
-  localStorage.setItem(TOKEN_KEY, loginResponse.access_token);
-  return loginResponse.access_token;
+  if (signIn.error) {
+    const signUp = await supabase.auth.signUp({
+      email: DEMO_EMAIL,
+      password: DEMO_PASSWORD,
+      options: {
+        data: {
+          full_name: DEMO_NAME,
+        },
+      },
+    });
+    if (signUp.error) {
+      throw new Error(signUp.error.message);
+    }
+
+    const retrySignIn = await supabase.auth.signInWithPassword({
+      email: DEMO_EMAIL,
+      password: DEMO_PASSWORD,
+    });
+    if (retrySignIn.error) {
+      throw new Error(retrySignIn.error.message);
+    }
+
+    const retryToken = retrySignIn.data.session?.access_token;
+    if (!retryToken) {
+      throw new Error("Supabase login did not return an access token");
+    }
+    localStorage.setItem(TOKEN_KEY, retryToken);
+    return retryToken;
+  }
+
+  const token = signIn.data.session?.access_token;
+  if (!token) {
+    throw new Error("Supabase login did not return an access token");
+  }
+  localStorage.setItem(TOKEN_KEY, token);
+  return token;
 }
 
 export const savePromptVersion = async (promptData) => {
