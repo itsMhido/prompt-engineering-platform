@@ -11,6 +11,7 @@ function generateUUID() {
   });
 }
 
+
 function normalizeModelConfig(model) {
   if (model?.provider !== 'Google') {
     return model;
