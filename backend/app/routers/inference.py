@@ -10,6 +10,7 @@ from app.models.prompt import Prompt, PromptVersion
 from app.models.experiment import Experiment
 from app.core.auth import get_current_user, get_user_workspace
 from app.services.ai_router import call_provider
+from app.services.experiment_logger import log_experiment, experiment_to_dict
 
 router = APIRouter()
 
@@ -46,13 +47,14 @@ async def run_inference(
 
     result = await call_provider(model, request.systemPrompt, request.userMessage)
 
-    experiment = Experiment(
+    experiment = log_experiment(
+        db=db,
         workspace_id=workspace.id,
-        prompt_id=request.promptId or None,
-        prompt_version_id=request.promptVersionId or None,
         model_id=model.id,
-        dataset_id=request.datasetId or None,
-        dataset_row_index=request.datasetRowIndex,
+        result=result,
+        user=current_user,
+        prompt_id=prompt.id if prompt else None,
+        prompt_version_id=version.id if version else None,
         prompt_name=prompt.name if prompt else None,
         prompt_version=f"v{version.version_number}" if version else None,
         model_name=model.name,
@@ -61,55 +63,9 @@ async def run_inference(
         user_template=request.userTemplate,
         variable_values=request.variableValues or {},
         interpolated_prompt=request.userMessage,
-        output=result["output"],
-        latency_ms=result["latency"],
-        input_tokens=result["input_tokens"],
-        output_tokens=result["output_tokens"],
-        total_tokens=result["total_tokens"],
-        cost_estimate=result["cost_estimate"],
-        status=result["status"],
-        error_message=result["error_message"],
-        score=None,
-        scores={},
-        reasoning={},
-        tags=[],
-        notes="",
-        created_by=current_user.id
+        dataset_id=request.datasetId or None,
+        dataset_row_index=request.datasetRowIndex
     )
-    db.add(experiment)
-    db.commit()
-    db.refresh(experiment)
-
-    exp_dict = {
-        "id": str(experiment.id),
-        "promptId": str(experiment.prompt_id) if experiment.prompt_id else None,
-        "promptVersionId": str(experiment.prompt_version_id) if experiment.prompt_version_id else None,
-        "modelId": str(experiment.model_id) if experiment.model_id else None,
-        "datasetId": str(experiment.dataset_id) if experiment.dataset_id else None,
-        "datasetRowIndex": experiment.dataset_row_index,
-        "promptName": experiment.prompt_name,
-        "promptVersion": experiment.prompt_version,
-        "modelName": experiment.model_name,
-        "provider": experiment.provider,
-        "systemPrompt": experiment.system_prompt,
-        "userTemplate": experiment.user_template,
-        "variableValues": experiment.variable_values,
-        "interpolatedPrompt": experiment.interpolated_prompt,
-        "output": experiment.output,
-        "latencyMs": experiment.latency_ms,
-        "inputTokens": experiment.input_tokens,
-        "outputTokens": experiment.output_tokens,
-        "totalTokens": experiment.total_tokens,
-        "costEstimate": experiment.cost_estimate,
-        "status": experiment.status,
-        "errorMessage": experiment.error_message,
-        "score": experiment.score,
-        "scores": experiment.scores,
-        "reasoning": experiment.reasoning,
-        "tags": experiment.tags,
-        "notes": experiment.notes,
-        "createdAt": experiment.created_at.isoformat() if experiment.created_at else ""
-    }
 
     return {
         "output": result["output"],
@@ -120,5 +76,5 @@ async def run_inference(
         "costEstimate": result["cost_estimate"],
         "status": result["status"],
         "errorMessage": result["error_message"],
-        "experiment": exp_dict
+        "experiment": experiment_to_dict(experiment)
     }
