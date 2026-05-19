@@ -417,7 +417,7 @@ function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDet
     }
 
     const dataset = datasets.find((item) => item.id === newBatchDatasetId);
-    const version = promptVersions.find((item) => String(item.version) === String(newBatchVersionId));
+    const version = promptVersions.find((item) => item.id === newBatchVersionId);
     if (!dataset || !version) {
       return;
     }
@@ -735,6 +735,11 @@ function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDet
                           <p className="line-clamp-2 text-xs leading-relaxed text-text-main opacity-80">
                             {experiment.output || <span className="italic text-text-muted">No output</span>}
                           </p>
+                          {experiment.status === 'error' && (
+                            <div style={{ color: '#ff6b6b', fontSize: 12, marginTop: 4 }}>
+                              {experiment.errorMessage || 'Unknown error'}
+                            </div>
+                          )}
                         </td>
                         {METRICS.slice(0, 2).map((metric) => (
                           <td key={metric} className="px-4 py-4 text-center">

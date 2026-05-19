@@ -209,7 +209,11 @@ async def batch_run_evaluation(
             # a. Interpolate variables into user_template
             interpolated = version.user_template
             for var_name, col_name in request.variableMapping.items():
-                value = row.row_data.get(col_name, "")
+                if not col_name:
+                    continue
+                value = row.row_data.get(col_name)
+                if value is None:
+                    continue
                 interpolated = interpolated.replace(f"{{{var_name}}}", str(value))
             
             # b. Call provider
