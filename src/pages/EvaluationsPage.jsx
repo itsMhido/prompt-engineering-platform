@@ -630,8 +630,13 @@ function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDet
               </div>
 
               <div className="pt-4">
-                <button onClick={handleRunNewBatch} disabled={!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId || isRunningBatch} className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-4 font-black uppercase tracking-[0.2em] text-panel shadow-lg shadow-primary/20 transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-30">
-                  {isRunningBatch ? <div className="h-4 w-4 rounded-full border-2 border-panel border-t-transparent animate-spin" /> : <Play size={18} fill="currentColor" />}
+                <button 
+                  onClick={handleRunNewBatch} 
+                  disabled={!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId || isRunningBatch} 
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-4 font-black uppercase tracking-[0.2em] text-panel shadow-lg shadow-primary/20 transition-all hover:bg-primary/90"
+                  style={{ opacity: isRunningBatch ? 0.6 : (!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId ? 0.3 : 1), cursor: isRunningBatch ? 'not-allowed' : (!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId ? 'not-allowed' : 'pointer') }}
+                >
+                  {!isRunningBatch && <Play size={18} fill="currentColor" />}
                   {isRunningBatch ? 'Running...' : 'Run Batch'}
                 </button>
                 {batchResult && (

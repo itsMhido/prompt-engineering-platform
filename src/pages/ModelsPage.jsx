@@ -25,6 +25,9 @@ const EMPTY_FORM = {
 };
 
 export default function ModelsPage({ onModelsChanged }) {
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
   const [models, setModels] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingModel, setEditingModel] = useState(null);
@@ -34,13 +37,20 @@ export default function ModelsPage({ onModelsChanged }) {
 
   useEffect(() => {
     const load = async () => {
-      const loaded = await listModels();
-      setModels(loaded);
-      const activeModel = loaded.find((model) => model.status === 'active');
-      onModelsChanged?.(activeModel?.name || '');
+      setIsInitialLoading(true);
+      try {
+        const loaded = await listModels();
+        setModels(loaded);
+        const activeModel = loaded.find((model) => model.status === 'active');
+        onModelsChanged?.(activeModel?.name || '');
+      } catch (err) {
+        setError(err.message || 'Failed to load models.');
+      } finally {
+        setIsInitialLoading(false);
+      }
     };
 
-    load().catch((err) => setError(err.message || 'Failed to load models.'));
+    load();
   }, [onModelsChanged]);
 
   const refreshModels = async () => {
@@ -69,6 +79,8 @@ export default function ModelsPage({ onModelsChanged }) {
   };
 
   const handleSave = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
     setError('');
 
     const payload = {
@@ -85,6 +97,7 @@ export default function ModelsPage({ onModelsChanged }) {
 
     if (!payload.name || !payload.modelId || !payload.endpoint) {
       setError('Name, model id, and endpoint are required.');
+      setIsSaving(false);
       return;
     }
 
@@ -98,6 +111,7 @@ export default function ModelsPage({ onModelsChanged }) {
       } else {
         if (!payload.apiKey) {
           setError('API key is required for a new model.');
+          setIsSaving(false);
           return;
         }
 
@@ -108,6 +122,8 @@ export default function ModelsPage({ onModelsChanged }) {
       closeModal();
     } catch (err) {
       setError(err.message || 'Failed to save model.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -150,15 +166,19 @@ export default function ModelsPage({ onModelsChanged }) {
   };
 
   const handleDelete = async (id) => {
+    if (deletingId) return;
     if (!confirm('Are you sure you want to remove this model?')) {
       return;
     }
 
+    setDeletingId(id);
     try {
       await removeModel(id);
       await refreshModels();
     } catch (err) {
       setError(err.message || 'Failed to delete model.');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -201,7 +221,15 @@ export default function ModelsPage({ onModelsChanged }) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+      {isInitialLoading ? (
+        <SkeletonLoader />
+      ) : models.length === 0 ? (
+        <div className="flex h-64 flex-col items-center justify-center text-center">
+          <h2 className="mb-1 text-xl font-bold">No models yet</h2>
+          <p className="text-text-muted">Add a model to get started</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
         {models.map((model) => (
           <div key={model.id} className="glass-panel group rounded-lg p-5 transition-colors hover:border-primary/50">
             <div className="mb-4 flex items-start justify-between">
@@ -221,7 +249,14 @@ export default function ModelsPage({ onModelsChanged }) {
                 <div className="flex gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">
                   <button onClick={() => handleEdit(model)} className="rounded p-1.5 text-text-muted transition-colors hover:bg-blue-400/10 hover:text-blue-400"><Edit2 size={14} /></button>
                   <button onClick={() => handleDuplicate(model)} className="rounded p-1.5 text-text-muted transition-colors hover:bg-yellow-400/10 hover:text-yellow-400"><Copy size={14} /></button>
-                  <button onClick={() => handleDelete(model.id)} className="rounded p-1.5 text-text-muted transition-colors hover:bg-red-400/10 hover:text-red-400"><Trash2 size={14} /></button>
+                  <button 
+                    onClick={() => handleDelete(model.id)} 
+                    disabled={deletingId === model.id}
+                    className="rounded p-1.5 text-text-muted transition-colors hover:bg-red-400/10 hover:text-red-400"
+                    style={{ opacity: deletingId === model.id ? 0.6 : 1, cursor: deletingId === model.id ? 'not-allowed' : 'pointer' }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
                 </div>
               </div>
             </div>
@@ -242,6 +277,7 @@ export default function ModelsPage({ onModelsChanged }) {
           </div>
         ))}
       </div>
+      )}
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={closeModal}>
@@ -333,7 +369,14 @@ export default function ModelsPage({ onModelsChanged }) {
             </div>
             <div className="mt-6 flex justify-end gap-3">
               <button onClick={closeModal} className="px-4 py-2 text-text-muted transition-colors hover:text-text-main">Cancel</button>
-              <button onClick={handleSave} className="rounded bg-primary px-4 py-2 text-panel transition-colors hover:bg-primary/90">Save Model</button>
+              <button 
+                onClick={handleSave} 
+                disabled={isSaving}
+                className="rounded bg-primary px-4 py-2 text-panel transition-colors hover:bg-primary/90"
+                style={{ opacity: isSaving ? 0.6 : 1, cursor: isSaving ? 'not-allowed' : 'pointer' }}
+              >
+                {isSaving ? "Saving..." : "Save Model"}
+              </button>
             </div>
           </div>
         </div>
@@ -341,3 +384,23 @@ export default function ModelsPage({ onModelsChanged }) {
     </div>
   );
 }
+
+const SkeletonCard = () => (
+  <div style={{
+    background: 'var(--surface, #1a1916)',
+    border: '1px solid var(--border, #252320)',
+    borderRadius: '8px',
+    padding: '20px',
+    animation: 'pulse 1.5s ease-in-out infinite'
+  }}>
+    <div style={{ height: 16, width: '60%', background: '#2a2926', borderRadius: 4, marginBottom: 12 }} />
+    <div style={{ height: 12, width: '40%', background: '#2a2926', borderRadius: 4, marginBottom: 8 }} />
+    <div style={{ height: 12, width: '80%', background: '#2a2926', borderRadius: 4 }} />
+  </div>
+);
+
+const SkeletonLoader = () => (
+  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+    {[1, 2, 3].map(i => <SkeletonCard key={i} />)}
+  </div>
+);

@@ -30,6 +30,7 @@ export default function PromptStudio({ promptId, onGoPrompts }) {
   const [copiedOutput, setCopiedOutput] = useState(false);
   const [error, setError] = useState('');
   const [isDirty, setIsDirty] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const textAreaRef = useRef(null);
   const highlightRef = useRef(null);
@@ -179,10 +180,10 @@ export default function PromptStudio({ promptId, onGoPrompts }) {
   };
 
   const handleSaveVersion = async () => {
-    if (!prompt) {
-      return;
-    }
+    if (!prompt) return;
+    if (isSaving) return;
 
+    setIsSaving(true);
     try {
       const nextVersion = await createPromptVersion(prompt.id, {
         systemPrompt,
@@ -198,6 +199,8 @@ export default function PromptStudio({ promptId, onGoPrompts }) {
       setError('');
     } catch (err) {
       setError(err.message || 'Failed to save prompt version.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -324,13 +327,10 @@ export default function PromptStudio({ promptId, onGoPrompts }) {
             onClick={handleRunPrompt}
             disabled={isRunning || !selectedModelId}
             className="flex h-8 items-center gap-2 rounded bg-primary px-3 text-xs font-bold text-panel transition-colors hover:bg-primary/90 disabled:opacity-50"
+            style={{ opacity: isRunning ? 0.6 : 1, cursor: isRunning ? 'not-allowed' : 'pointer' }}
           >
-            {isRunning ? (
-              <div className="h-3 w-3 rounded-full border-2 border-panel border-t-transparent animate-spin" />
-            ) : (
-              <Play size={13} fill="currentColor" />
-            )}
-            Run Prompt
+            {!isRunning && <Play size={13} fill="currentColor" />}
+            {isRunning ? "Running..." : "Run Prompt"}
           </button>
         </div>
       </div>
@@ -374,8 +374,13 @@ export default function PromptStudio({ promptId, onGoPrompts }) {
               placeholder="Commit message (optional)"
               className="mb-2 h-8 w-full rounded border border-border bg-background px-2 text-xs text-text-main focus:border-primary/50 focus:outline-none"
             />
-            <button onClick={handleSaveVersion} className="h-8 w-full rounded bg-primary text-xs font-bold text-panel transition-colors hover:bg-primary/90">
-              Save as new version
+            <button 
+              onClick={handleSaveVersion} 
+              disabled={isSaving}
+              className="h-8 w-full rounded bg-primary text-xs font-bold text-panel transition-colors hover:bg-primary/90"
+              style={{ opacity: isSaving ? 0.6 : 1, cursor: isSaving ? 'not-allowed' : 'pointer' }}
+            >
+              {isSaving ? "Saving..." : "Save as new version"}
             </button>
           </div>
         </div>

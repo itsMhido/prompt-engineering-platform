@@ -9,11 +9,14 @@ import {
 } from '../utils/api';
 
 export default function PromptsPage({ onOpenPrompt }) {
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [prompts, setPrompts] = useState([]);
   const [search, setSearch] = useState('');
   const [activeTag, setActiveTag] = useState('all');
   const [showCreate, setShowCreate] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isDuplicatingId, setIsDuplicatingId] = useState(null);
   const [error, setError] = useState('');
 
   const refresh = async () => {
@@ -22,7 +25,17 @@ export default function PromptsPage({ onOpenPrompt }) {
   };
 
   useEffect(() => {
-    refresh().catch((err) => setError(err.message || 'Failed to load prompts.'));
+    const load = async () => {
+      setIsInitialLoading(true);
+      try {
+        await refresh();
+      } catch (err) {
+        setError(err.message || 'Failed to load prompts.');
+      } finally {
+        setIsInitialLoading(false);
+      }
+    };
+    load();
   }, []);
 
   const tags = useMemo(() => {
@@ -37,6 +50,14 @@ export default function PromptsPage({ onOpenPrompt }) {
       return matchesSearch && matchesTag;
     });
   }, [prompts, search, activeTag]);
+
+  if (isInitialLoading) {
+    return (
+      <div className="h-full overflow-y-auto p-8">
+        <SkeletonLoader />
+      </div>
+    );
+  }
 
   if (prompts.length === 0 && !error) {
     return (
@@ -149,33 +170,45 @@ export default function PromptsPage({ onOpenPrompt }) {
               <button onClick={() => onOpenPrompt(prompt.id)} className="text-xs font-medium text-primary hover:text-primary/80">Open</button>
               <button
                 onClick={async () => {
+                  if (isDuplicatingId) return;
+                  setIsDuplicatingId(prompt.id);
                   try {
                     const duplicated = await duplicatePrompt(prompt.id);
                     await refresh();
                     onOpenPrompt(duplicated.prompt.id);
                   } catch (err) {
                     setError(err.message || 'Failed to duplicate prompt.');
+                  } finally {
+                    setIsDuplicatingId(null);
                   }
                 }}
+                disabled={isDuplicatingId === prompt.id}
                 className="text-xs text-text-muted hover:text-text-main"
+                style={{ opacity: isDuplicatingId === prompt.id ? 0.6 : 1, cursor: isDuplicatingId === prompt.id ? 'not-allowed' : 'pointer' }}
               >
-                Duplicate
+                {isDuplicatingId === prompt.id ? "Duplicating..." : "Duplicate"}
               </button>
               {deletingId === prompt.id ? (
                 <>
                   <button
                     onClick={async () => {
+                      if (isDeleting) return;
+                      setIsDeleting(true);
                       try {
                         await removePrompt(prompt.id);
                         setDeletingId(null);
                         await refresh();
                       } catch (err) {
                         setError(err.message || 'Failed to delete prompt.');
+                      } finally {
+                        setIsDeleting(false);
                       }
                     }}
+                    disabled={isDeleting}
                     className="ml-auto text-xs text-red-400 hover:text-red-300"
+                    style={{ opacity: isDeleting ? 0.6 : 1, cursor: isDeleting ? 'not-allowed' : 'pointer' }}
                   >
-                    Confirm
+                    {isDeleting ? "Deleting..." : "Confirm"}
                   </button>
                   <button onClick={() => setDeletingId(null)} className="text-xs text-text-muted hover:text-text-main">Cancel</button>
                 </>
@@ -201,6 +234,7 @@ export default function PromptsPage({ onOpenPrompt }) {
 }
 
 function CreatePromptModal({ onClose, onCreated }) {
+  const [isSaving, setIsSaving] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [tagInput, setTagInput] = useState('');
@@ -224,11 +258,15 @@ function CreatePromptModal({ onClose, onCreated }) {
   };
 
   const handleCreate = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
     try {
       const created = await createPrompt({ name: name.trim(), description, tags });
       onCreated(created.prompt);
     } catch (err) {
       setError(err.message || 'Failed to create prompt.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -281,11 +319,36 @@ function CreatePromptModal({ onClose, onCreated }) {
         </div>
         <div className="mt-6 flex justify-end gap-3">
           <button onClick={onClose} className="px-4 py-2 text-sm text-text-muted hover:text-text-main">Cancel</button>
-          <button disabled={!name.trim()} onClick={handleCreate} className="rounded bg-primary px-4 py-2 text-sm text-panel hover:bg-primary/90 disabled:opacity-40">
-            Create Prompt
+          <button 
+            disabled={!name.trim() || isSaving} 
+            onClick={handleCreate} 
+            className="rounded bg-primary px-4 py-2 text-sm text-panel hover:bg-primary/90 disabled:opacity-40"
+            style={{ opacity: isSaving ? 0.6 : (!name.trim() ? 0.4 : 1), cursor: isSaving ? 'not-allowed' : 'pointer' }}
+          >
+            {isSaving ? "Creating..." : "Create Prompt"}
           </button>
         </div>
       </div>
     </div>
   );
 }
+
+const SkeletonCard = () => (
+  <div style={{
+    background: 'var(--surface, #1a1916)',
+    border: '1px solid var(--border, #252320)',
+    borderRadius: '8px',
+    padding: '20px',
+    animation: 'pulse 1.5s ease-in-out infinite'
+  }}>
+    <div style={{ height: 16, width: '60%', background: '#2a2926', borderRadius: 4, marginBottom: 12 }} />
+    <div style={{ height: 12, width: '40%', background: '#2a2926', borderRadius: 4, marginBottom: 8 }} />
+    <div style={{ height: 12, width: '80%', background: '#2a2926', borderRadius: 4 }} />
+  </div>
+);
+
+const SkeletonLoader = () => (
+  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+    {[1, 2, 3].map(i => <SkeletonCard key={i} />)}
+  </div>
+);

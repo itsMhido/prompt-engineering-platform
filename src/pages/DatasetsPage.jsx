@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { Database, Upload, Plus, Search } from 'lucide-react';
 import { cn, timeAgo } from '../utils/helpers';
 import {
@@ -21,10 +21,13 @@ const CATEGORY_COLORS = {
 };
 
 export default function DatasetsPage() {
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [datasets, setDatasets] = useState([]);
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
   const [deletingId, setDeletingId] = useState(null);
+  const [deletingApiId, setDeletingApiId] = useState(null);
+  const [duplicatingId, setDuplicatingId] = useState(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [selectedDataset, setSelectedDataset] = useState(null);
@@ -36,7 +39,17 @@ export default function DatasetsPage() {
   };
 
   useEffect(() => {
-    refreshDatasets().catch((err) => setError(err.message || 'Failed to load datasets.'));
+    const load = async () => {
+      setIsInitialLoading(true);
+      try {
+        await refreshDatasets();
+      } catch (err) {
+        setError(err.message || 'Failed to load datasets.');
+      } finally {
+        setIsInitialLoading(false);
+      }
+    };
+    load();
   }, []);
 
   const filtered = useMemo(() => {
@@ -58,6 +71,8 @@ export default function DatasetsPage() {
   };
 
   const handleDuplicate = async (datasetId) => {
+    if (duplicatingId) return;
+    setDuplicatingId(datasetId);
     try {
       const source = await getDataset(datasetId);
       const copy = await createDataset({
@@ -72,6 +87,8 @@ export default function DatasetsPage() {
       setSelectedDataset(copy);
     } catch (err) {
       setError(err.message || 'Failed to duplicate dataset.');
+    } finally {
+      setDuplicatingId(null);
     }
   };
 
@@ -81,6 +98,8 @@ export default function DatasetsPage() {
       return;
     }
 
+    if (deletingApiId) return;
+    setDeletingApiId(id);
     try {
       await removeDataset(id);
       setDeletingId(null);
@@ -90,6 +109,8 @@ export default function DatasetsPage() {
       await refreshDatasets();
     } catch (err) {
       setError(err.message || 'Failed to delete dataset.');
+    } finally {
+      setDeletingApiId(null);
     }
   };
 
@@ -142,6 +163,14 @@ export default function DatasetsPage() {
         onBack={() => setSelectedDataset(null)}
         onUpdate={handleUpdateDataset}
       />
+    );
+  }
+
+  if (isInitialLoading) {
+    return (
+      <div className="h-full overflow-y-auto p-8 animate-in fade-in duration-300">
+        <SkeletonLoader />
+      </div>
     );
   }
 
@@ -232,6 +261,8 @@ export default function DatasetsPage() {
               key={dataset.id}
               ds={dataset}
               isDeleting={deletingId === dataset.id}
+              isDeletingApi={deletingApiId === dataset.id}
+              isDuplicating={duplicatingId === dataset.id}
               onView={() => handleOpenDataset(dataset.id)}
               onDuplicate={() => handleDuplicate(dataset.id)}
               onDelete={() => handleDelete(dataset.id)}
@@ -258,7 +289,7 @@ export default function DatasetsPage() {
   );
 }
 
-function DatasetCard({ ds, isDeleting, onView, onDuplicate, onDelete, onCancelDelete }) {
+function DatasetCard({ ds, isDeleting, isDeletingApi, isDuplicating, onView, onDuplicate, onDelete, onCancelDelete }) {
   const catColor = CATEGORY_COLORS[ds.category] || CATEGORY_COLORS.Custom;
   const colPreview = (ds.columns || []).slice(0, 4);
   const rowCount = ds.rowCount || 0;
@@ -299,8 +330,13 @@ function DatasetCard({ ds, isDeleting, onView, onDuplicate, onDelete, onCancelDe
         {isDeleting ? (
           <div className="flex w-full items-center gap-3">
             <span className="flex-1 text-xs text-text-muted">Delete this dataset?</span>
-            <button onClick={onDelete} className="text-xs font-medium text-red-400 transition-colors hover:text-red-300">
-              Confirm
+            <button 
+              onClick={onDelete} 
+              disabled={isDeletingApi}
+              className="text-xs font-medium text-red-400 transition-colors hover:text-red-300"
+              style={{ opacity: isDeletingApi ? 0.6 : 1, cursor: isDeletingApi ? 'not-allowed' : 'pointer' }}
+            >
+              {isDeletingApi ? "Deleting..." : "Confirm"}
             </button>
             <button onClick={onCancelDelete} className="text-xs text-text-muted transition-colors hover:text-text-main">
               Cancel
@@ -311,8 +347,13 @@ function DatasetCard({ ds, isDeleting, onView, onDuplicate, onDelete, onCancelDe
             <button onClick={onView} className="text-xs font-medium text-primary transition-colors hover:text-primary/80">
               View
             </button>
-            <button onClick={onDuplicate} className="text-xs text-text-muted transition-colors hover:text-text-main">
-              Duplicate
+            <button 
+              onClick={onDuplicate} 
+              disabled={isDuplicating}
+              className="text-xs text-text-muted transition-colors hover:text-text-main"
+              style={{ opacity: isDuplicating ? 0.6 : 1, cursor: isDuplicating ? 'not-allowed' : 'pointer' }}
+            >
+              {isDuplicating ? "Duplicating..." : "Duplicate"}
             </button>
             <button onClick={onDelete} className="ml-auto text-xs text-text-muted transition-colors hover:text-red-400">
               Delete
@@ -325,6 +366,7 @@ function DatasetCard({ ds, isDeleting, onView, onDuplicate, onDelete, onCancelDe
 }
 
 function CreateDatasetModal({ onClose, onCreate }) {
+  const [isSaving, setIsSaving] = useState(false);
   const [name, setName] = useState('');
   const [category, setCategory] = useState('QA');
   const [columns, setColumns] = useState(['']);
@@ -351,7 +393,7 @@ function CreateDatasetModal({ onClose, onCreate }) {
     setColumns((prev) => prev.length > 1 ? prev.filter((_, columnIndex) => columnIndex !== index) : prev);
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const trimmedName = name.trim();
     if (!trimmedName) {
       setNameError('Name is required');
@@ -363,13 +405,19 @@ function CreateDatasetModal({ onClose, onCreate }) {
       return;
     }
 
-    onCreate({
-      name: trimmedName,
-      category,
-      version: 'v1',
-      columns: validColumns,
-      rows: []
-    });
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      await onCreate({
+        name: trimmedName,
+        category,
+        version: 'v1',
+        columns: validColumns,
+        rows: []
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -438,8 +486,13 @@ function CreateDatasetModal({ onClose, onCreate }) {
 
         <div className="flex justify-end gap-3 border-t border-border pt-1">
           <button onClick={onClose} className="px-4 py-2 text-sm text-text-muted transition-colors hover:text-text-main">Cancel</button>
-          <button onClick={handleSubmit} disabled={!name.trim() || columns.filter((column) => column.trim()).length === 0} className="rounded bg-primary px-4 py-2 text-sm font-medium text-panel transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40">
-            Create Dataset
+          <button 
+            onClick={handleSubmit} 
+            disabled={!name.trim() || columns.filter((column) => column.trim()).length === 0 || isSaving} 
+            className="rounded bg-primary px-4 py-2 text-sm font-medium text-panel transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ opacity: isSaving ? 0.6 : 1, cursor: isSaving ? 'not-allowed' : 'pointer' }}
+          >
+            {isSaving ? "Creating..." : "Create Dataset"}
           </button>
         </div>
       </div>
@@ -448,6 +501,7 @@ function CreateDatasetModal({ onClose, onCreate }) {
 }
 
 function UploadDatasetModal({ onClose, onImport }) {
+  const [isImporting, setIsImporting] = useState(false);
   const [parsedData, setParsedData] = useState(null);
   const [name, setName] = useState('');
   const [category, setCategory] = useState('QA');
@@ -537,18 +591,24 @@ function UploadDatasetModal({ onClose, onImport }) {
     reader.readAsText(file);
   };
 
-  const handleImport = () => {
+  const handleImportClick = async () => {
     if (!parsedData || !name.trim()) {
       return;
     }
 
-    onImport({
-      name: name.trim(),
-      category,
-      version: 'v1',
-      columns: parsedData.columns,
-      rows: parsedData.rows
-    });
+    if (isImporting) return;
+    setIsImporting(true);
+    try {
+      await onImport({
+        name: name.trim(),
+        category,
+        version: 'v1',
+        columns: parsedData.columns,
+        rows: parsedData.rows
+      });
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   return (
@@ -640,7 +700,14 @@ function UploadDatasetModal({ onClose, onImport }) {
               <button onClick={() => setParsedData(null)} className="text-sm text-text-muted transition-colors hover:text-text-main">Choose different file</button>
               <div className="flex gap-3">
                 <button onClick={onClose} className="px-4 py-2 text-sm text-text-muted transition-colors hover:text-text-main">Cancel</button>
-                <button onClick={handleImport} className="rounded-md bg-primary px-6 py-2 text-sm font-bold text-panel transition-colors hover:bg-primary/90">Import Dataset</button>
+                <button 
+                  onClick={handleImportClick} 
+                  disabled={isImporting}
+                  className="rounded-md bg-primary px-6 py-2 text-sm font-bold text-panel transition-colors hover:bg-primary/90"
+                  style={{ opacity: isImporting ? 0.6 : 1, cursor: isImporting ? 'not-allowed' : 'pointer' }}
+                >
+                  {isImporting ? "Importing..." : "Import Dataset"}
+                </button>
               </div>
             </div>
           </div>
@@ -653,9 +720,22 @@ function UploadDatasetModal({ onClose, onImport }) {
 function DatasetDetail({ dataset, onBack, onUpdate }) {
   const [localDataset, setLocalDataset] = useState({
     ...dataset,
-    columns: Array.isArray(dataset.columns) ? dataset.columns : [],
-    rows: Array.isArray(dataset.rows) ? dataset.rows : []
+    columns: Array.isArray(dataset.columns) ? dataset.columns : []
   });
+  const localDatasetRef = useRef(localDataset);
+  useEffect(() => { localDatasetRef.current = localDataset; }, [localDataset]);
+
+  const [savedRows, setSavedRows] = useState(Array.isArray(dataset.rows) ? dataset.rows : []);
+  const savedRowsRef = useRef(savedRows);
+  useEffect(() => { savedRowsRef.current = savedRows; }, [savedRows]);
+
+  const [editBuffer, setEditBuffer] = useState({});
+  const editBufferRef = useRef(editBuffer);
+  useEffect(() => { editBufferRef.current = editBuffer; }, [editBuffer]);
+
+  const [savingCells, setSavingCells] = useState(new Set());
+  const saveTimers = useRef({});
+
   const [selectedRows, setSelectedRows] = useState(new Set());
   const [saveStatus, setSaveStatus] = useState('Saved');
   const [showVersionHistory, setShowVersionHistory] = useState(false);
@@ -665,32 +745,37 @@ function DatasetDetail({ dataset, onBack, onUpdate }) {
   useEffect(() => {
     setLocalDataset({
       ...dataset,
-      columns: Array.isArray(dataset.columns) ? dataset.columns : [],
-      rows: Array.isArray(dataset.rows) ? dataset.rows : []
+      columns: Array.isArray(dataset.columns) ? dataset.columns : []
     });
+    setSavedRows(Array.isArray(dataset.rows) ? dataset.rows : []);
     setSelectedRows(new Set());
     setEditingCell(null);
     setEditingHeader(null);
     setSaveStatus('Saved');
-  }, [dataset]);
+    setEditBuffer({});
+    setSavingCells(new Set());
+  }, [dataset.id]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(saveTimers.current).forEach(clearTimeout);
+    };
+  }, []);
 
   useEffect(() => {
     const unchanged = (
       localDataset.name === dataset.name
       && localDataset.category === dataset.category
       && localDataset.version === dataset.version
-      && JSON.stringify(localDataset.columns) === JSON.stringify(dataset.columns)
-      && JSON.stringify(localDataset.rows) === JSON.stringify(dataset.rows)
     );
 
-    if (unchanged) {
-      return;
-    }
+    if (unchanged) return;
 
     setSaveStatus('Saving...');
     const timer = setTimeout(async () => {
       try {
-        await onUpdate(localDataset);
+        await flushAllPendingEdits();
+        await onUpdate({ ...localDataset, rows: savedRowsRef.current });
         setSaveStatus('Saved');
       } catch {
         setSaveStatus('Error');
@@ -698,99 +783,173 @@ function DatasetDetail({ dataset, onBack, onUpdate }) {
     }, 800);
 
     return () => clearTimeout(timer);
-  }, [localDataset, dataset, onUpdate]);
+  }, [localDataset.name, localDataset.category, localDataset.version, dataset, onUpdate]);
 
-  const addRow = () => {
+  const flushAllPendingEdits = async () => {
+    Object.values(saveTimers.current).forEach(clearTimeout);
+    saveTimers.current = {};
+
+    if (Object.keys(editBufferRef.current).length === 0) return;
+
+    const mergedRows = savedRowsRef.current.map((row, rowIndex) => {
+      const rowEdits = {};
+      Object.entries(editBufferRef.current).forEach(([key, value]) => {
+        const [keyRowIndex, ...colParts] = key.split('-');
+        if (parseInt(keyRowIndex) === rowIndex) {
+          rowEdits[colParts.join('-')] = value;
+        }
+      });
+      return { ...row, ...rowEdits };
+    });
+
+    savedRowsRef.current = mergedRows;
+    setSavedRows(mergedRows);
+    setEditBuffer({});
+    await onUpdate({ ...localDatasetRef.current, rows: mergedRows });
+  };
+
+  const getCellValue = (rowIndex, colName) => {
+    const bufferKey = `${rowIndex}-${colName}`;
+    return bufferKey in editBuffer
+      ? editBuffer[bufferKey]
+      : savedRows[rowIndex]?.[colName] ?? '';
+  };
+
+  const debouncedSaveCell = (rowIndex, colName, value) => {
+    const bufferKey = `${rowIndex}-${colName}`;
+
+    if (saveTimers.current[bufferKey]) {
+      clearTimeout(saveTimers.current[bufferKey]);
+    }
+
+    saveTimers.current[bufferKey] = setTimeout(async () => {
+      setSavingCells(prev => new Set(prev).add(bufferKey));
+      try {
+        const updatedRows = savedRowsRef.current.map((row, i) => {
+          if (i !== rowIndex) return row;
+          return { ...row, [colName]: value };
+        });
+
+        savedRowsRef.current = updatedRows;
+        setSavedRows(updatedRows);
+
+        await onUpdate({ ...localDatasetRef.current, rows: updatedRows });
+
+        setEditBuffer(prev => {
+          const next = { ...prev };
+          delete next[bufferKey];
+          return next;
+        });
+      } catch (err) {
+        console.error(`Failed to save cell ${bufferKey}:`, err);
+      } finally {
+        setSavingCells(prev => {
+          const next = new Set(prev);
+          next.delete(bufferKey);
+          return next;
+        });
+      }
+    }, 800);
+  };
+
+  const handleCellEdit = (rowIndex, colName, newValue) => {
+    const bufferKey = `${rowIndex}-${colName}`;
+    setEditBuffer(prev => ({ ...prev, [bufferKey]: newValue }));
+    debouncedSaveCell(rowIndex, colName, newValue);
+  };
+
+  const addRow = async () => {
+    await flushAllPendingEdits();
     const newRow = {};
     localDataset.columns.forEach((column) => {
       newRow[column] = '';
     });
-
-    setLocalDataset((prev) => ({
-      ...prev,
-      rows: [...prev.rows, newRow]
-    }));
+    const nextRows = [...savedRowsRef.current, newRow];
+    setSavedRows(nextRows);
+    savedRowsRef.current = nextRows;
+    await onUpdate({ ...localDatasetRef.current, rows: nextRows });
   };
 
-  const deleteRow = (index) => {
-    setLocalDataset((prev) => ({
-      ...prev,
-      rows: prev.rows.filter((_, rowIndex) => rowIndex !== index)
-    }));
-
+  const deleteRow = async (index) => {
+    await flushAllPendingEdits();
+    const nextRows = savedRowsRef.current.filter((_, rowIndex) => rowIndex !== index);
+    setSavedRows(nextRows);
+    savedRowsRef.current = nextRows;
     setSelectedRows((prev) => {
       const next = new Set(prev);
       next.delete(index);
       return next;
     });
+    await onUpdate({ ...localDatasetRef.current, rows: nextRows });
   };
 
-  const deleteSelectedRows = () => {
-    setLocalDataset((prev) => ({
-      ...prev,
-      rows: prev.rows.filter((_, index) => !selectedRows.has(index))
-    }));
+  const deleteSelectedRows = async () => {
+    await flushAllPendingEdits();
+    const nextRows = savedRowsRef.current.filter((_, index) => !selectedRows.has(index));
+    setSavedRows(nextRows);
+    savedRowsRef.current = nextRows;
     setSelectedRows(new Set());
+    await onUpdate({ ...localDatasetRef.current, rows: nextRows });
   };
 
-  const addColumn = () => {
+  const addColumn = async () => {
+    await flushAllPendingEdits();
     const columnName = `column_${localDataset.columns.length + 1}`;
-    const nextRows = localDataset.rows.map((row) => ({ ...row, [columnName]: '' }));
-    setLocalDataset((prev) => ({
-      ...prev,
-      columns: [...prev.columns, columnName],
-      rows: nextRows
-    }));
+    const nextColumns = [...localDataset.columns, columnName];
+    const nextRows = savedRowsRef.current.map((row) => ({ ...row, [columnName]: '' }));
+    
+    const nextLocal = { ...localDatasetRef.current, columns: nextColumns };
+    setLocalDataset(nextLocal);
+    localDatasetRef.current = nextLocal;
+    setSavedRows(nextRows);
+    savedRowsRef.current = nextRows;
+    await onUpdate({ ...nextLocal, rows: nextRows });
   };
 
-  const deleteColumn = (columnName) => {
-    if (localDataset.columns.length <= 1) {
-      return;
-    }
+  const deleteColumn = async (columnName) => {
+    if (localDataset.columns.length <= 1) return;
+    await flushAllPendingEdits();
 
     const nextColumns = localDataset.columns.filter((column) => column !== columnName);
-    const nextRows = localDataset.rows.map((row) => (
+    const nextRows = savedRowsRef.current.map((row) => (
       Object.fromEntries(Object.entries(row).filter(([key]) => key !== columnName))
     ));
 
-    setLocalDataset((prev) => ({
-      ...prev,
-      columns: nextColumns,
-      rows: nextRows
-    }));
+    const nextLocal = { ...localDatasetRef.current, columns: nextColumns };
+    setLocalDataset(nextLocal);
+    localDatasetRef.current = nextLocal;
+    setSavedRows(nextRows);
+    savedRowsRef.current = nextRows;
+    await onUpdate({ ...nextLocal, rows: nextRows });
   };
 
-  const updateCell = (rowIndex, columnName, value) => {
-    const nextRows = [...localDataset.rows];
-    nextRows[rowIndex] = { ...nextRows[rowIndex], [columnName]: value };
-    setLocalDataset((prev) => ({ ...prev, rows: nextRows }));
-  };
-
-  const updateHeader = (index, newName) => {
+  const updateHeader = async (index, newName) => {
     const oldName = localDataset.columns[index];
     if (!newName || newName === oldName) {
       setEditingHeader(null);
       return;
     }
+    await flushAllPendingEdits();
 
     const nextColumns = [...localDataset.columns];
     nextColumns[index] = newName;
-    const nextRows = localDataset.rows.map((row) => {
+    const nextRows = savedRowsRef.current.map((row) => {
       const { [oldName]: value, ...rest } = row;
       return { ...rest, [newName]: value };
     });
 
-    setLocalDataset((prev) => ({
-      ...prev,
-      columns: nextColumns,
-      rows: nextRows
-    }));
+    const nextLocal = { ...localDatasetRef.current, columns: nextColumns };
+    setLocalDataset(nextLocal);
+    localDatasetRef.current = nextLocal;
+    setSavedRows(nextRows);
+    savedRowsRef.current = nextRows;
     setEditingHeader(null);
+    await onUpdate({ ...nextLocal, rows: nextRows });
   };
 
   const exportCSV = () => {
     const headers = localDataset.columns.join(',');
-    const rows = localDataset.rows.map((row) => (
+    const rows = savedRows.map((row) => (
       localDataset.columns.map((column) => `"${String(row[column] || '').replace(/"/g, '""')}"`).join(',')
     )).join('\n');
     const blob = new Blob([headers + '\n' + rows], { type: 'text/csv' });
@@ -803,7 +962,7 @@ function DatasetDetail({ dataset, onBack, onUpdate }) {
   };
 
   const exportJSON = () => {
-    const blob = new Blob([JSON.stringify(localDataset.rows, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(savedRows, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
@@ -826,7 +985,7 @@ function DatasetDetail({ dataset, onBack, onUpdate }) {
               <div className="flex items-center gap-3">
                 <input type="text" value={localDataset.name} onChange={(e) => setLocalDataset({ ...localDataset, name: e.target.value })} className="rounded bg-transparent px-2 text-lg font-bold text-text-main hover:bg-white/5 focus:outline-none focus:ring-0" />
                 <span className="rounded border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-xs text-primary">{localDataset.version}</span>
-                <span className="text-xs text-text-muted">{localDataset.rows.length} rows</span>
+                <span className="text-xs text-text-muted">{savedRows.length} rows</span>
                 <span className={cn('text-xs transition-opacity duration-300', saveStatus === 'Saving...' ? 'text-primary opacity-100' : saveStatus === 'Error' ? 'text-red-400 opacity-100' : 'text-text-muted opacity-60')}>
                   {saveStatus}
                 </span>
@@ -861,10 +1020,10 @@ function DatasetDetail({ dataset, onBack, onUpdate }) {
                   <th className="sticky top-0 w-12 border-r border-border bg-background/50 px-4 py-3">
                     <input
                       type="checkbox"
-                      checked={selectedRows.size > 0 && selectedRows.size === localDataset.rows.length}
+                      checked={selectedRows.size > 0 && selectedRows.size === savedRows.length}
                       onChange={(e) => {
                         if (e.target.checked) {
-                          setSelectedRows(new Set(localDataset.rows.map((_, index) => index)));
+                          setSelectedRows(new Set(savedRows.map((_, index) => index)));
                         } else {
                           setSelectedRows(new Set());
                         }
@@ -894,7 +1053,7 @@ function DatasetDetail({ dataset, onBack, onUpdate }) {
                 </tr>
               </thead>
               <tbody>
-                {localDataset.rows.length === 0 ? (
+                {savedRows.length === 0 ? (
                   <tr>
                     <td colSpan={localDataset.columns.length + 3} className="py-20 text-center">
                       <div className="flex flex-col items-center gap-3">
@@ -905,7 +1064,7 @@ function DatasetDetail({ dataset, onBack, onUpdate }) {
                     </td>
                   </tr>
                 ) : (
-                  localDataset.rows.map((row, rowIndex) => (
+                  savedRows.map((row, rowIndex) => (
                     <tr key={rowIndex} className="group border-b border-border transition-colors hover:bg-white/[0.02]">
                       <td className="border-r border-border px-4 py-2">
                         <input
@@ -926,23 +1085,49 @@ function DatasetDetail({ dataset, onBack, onUpdate }) {
                       {localDataset.columns.map((column, columnIndex) => (
                         <td key={`${column}-${columnIndex}`} className="group/cell relative max-w-md truncate border-r border-border px-4 py-2" onClick={() => setEditingCell({ rowIndex, colName: column })}>
                           {editingCell?.rowIndex === rowIndex && editingCell?.colName === column ? (
-                            <textarea
-                              autoFocus
-                              defaultValue={row[column]}
-                              onBlur={(e) => {
-                                updateCell(rowIndex, column, e.target.value);
-                                setEditingCell(null);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter' && !e.shiftKey) {
-                                  updateCell(rowIndex, column, e.target.value);
+                            <div className="relative h-full w-full">
+                              <textarea
+                                autoFocus
+                                value={getCellValue(rowIndex, column)}
+                                onChange={(e) => handleCellEdit(rowIndex, column, e.target.value)}
+                                onBlur={() => {
+                                  const bufferKey = `${rowIndex}-${column}`;
+                                  if (saveTimers.current[bufferKey]) {
+                                    clearTimeout(saveTimers.current[bufferKey]);
+                                    const value = editBufferRef.current[bufferKey];
+                                    if (value !== undefined) {
+                                      saveTimers.current[bufferKey] = setTimeout(
+                                        () => debouncedSaveCell(rowIndex, column, value), 0
+                                      );
+                                    }
+                                  }
                                   setEditingCell(null);
-                                }
-                              }}
-                              className="absolute inset-0 z-10 h-full w-full resize-none overflow-hidden border border-primary/50 bg-background px-4 py-2 text-text-main focus:outline-none"
-                            />
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    e.target.blur();
+                                  }
+                                }}
+                                className="absolute inset-0 z-10 h-full w-full resize-none overflow-hidden border border-primary/50 bg-background px-4 py-2 text-text-main focus:outline-none"
+                              />
+                            </div>
                           ) : (
-                            <span className="block min-h-[1.25rem]">{row[column] || <span className="italic text-text-muted/30">empty</span>}</span>
+                            <div className="relative flex items-center justify-between">
+                              <span className="block min-h-[1.25rem]">{getCellValue(rowIndex, column) || <span className="italic text-text-muted/30">empty</span>}</span>
+                              {savingCells.has(`${rowIndex}-${column}`) && (
+                                <span style={{
+                                  position: 'absolute',
+                                  right: 6,
+                                  top: '50%',
+                                  transform: 'translateY(-50%)',
+                                  width: 6,
+                                  height: 6,
+                                  borderRadius: '50%',
+                                  background: '#88d273'
+                                }} />
+                              )}
+                            </div>
                           )}
                         </td>
                       ))}
@@ -972,7 +1157,7 @@ function DatasetDetail({ dataset, onBack, onUpdate }) {
                 <span className="text-sm font-bold text-primary">Current</span>
                 <span className="font-mono text-[10px] text-text-muted">{new Date(dataset.updatedAt).toLocaleString()}</span>
               </div>
-              <p className="text-xs text-text-muted">{localDataset.rows.length} rows</p>
+              <p className="text-xs text-text-muted">{savedRows.length} rows</p>
             </div>
             <p className="py-10 text-center font-mono text-xs uppercase tracking-widest text-text-muted opacity-40">Dataset revisions are server-backed through the current version only</p>
           </div>
@@ -981,3 +1166,23 @@ function DatasetDetail({ dataset, onBack, onUpdate }) {
     </div>
   );
 }
+
+const SkeletonCard = () => (
+  <div style={{
+    background: 'var(--surface, #1a1916)',
+    border: '1px solid var(--border, #252320)',
+    borderRadius: '8px',
+    padding: '20px',
+    animation: 'pulse 1.5s ease-in-out infinite'
+  }}>
+    <div style={{ height: 16, width: '60%', background: '#2a2926', borderRadius: 4, marginBottom: 12 }} />
+    <div style={{ height: 12, width: '40%', background: '#2a2926', borderRadius: 4, marginBottom: 8 }} />
+    <div style={{ height: 12, width: '80%', background: '#2a2926', borderRadius: 4 }} />
+  </div>
+);
+
+const SkeletonLoader = () => (
+  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
+    {[1, 2, 3].map(i => <SkeletonCard key={i} />)}
+  </div>
+);
