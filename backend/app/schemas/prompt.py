@@ -33,6 +33,11 @@ class VersionCreate(APIModel):
     userTemplate: str
     commitMessage: str = ""
 
+class VersionUpdate(APIModel):
+    systemPrompt: Optional[str] = None
+    userTemplate: Optional[str] = None
+    commitMessage: Optional[str] = None
+
 class VersionResponse(APIModel):
     id: str
     promptId: str

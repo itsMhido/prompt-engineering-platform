@@ -8,7 +8,7 @@ from app.database import get_db
 from app.models.user import User
 from app.models.prompt import Prompt, PromptVersion
 from app.models.experiment import Experiment
-from app.schemas.prompt import PromptCreate, PromptUpdate, VersionCreate
+from app.schemas.prompt import PromptCreate, PromptUpdate, VersionCreate, VersionUpdate
 from app.core.auth import get_current_user, get_user_workspace
 
 router = APIRouter()
@@ -322,6 +322,48 @@ def get_prompt_version(
     if not version:
         raise HTTPException(status_code=404, detail="Version not found")
         
+    return {
+        "version": {
+            "id": str(version.id),
+            "promptId": str(version.prompt_id),
+            "versionNumber": version.version_number,
+            "versionDisplay": f"v{version.version_number}",
+            "systemPrompt": version.system_prompt,
+            "userTemplate": version.user_template,
+            "commitMessage": version.commit_message,
+            "createdAt": version.created_at.isoformat() if version.created_at else ""
+        }
+    }
+
+@router.patch("/{prompt_id}/versions/{version_id}", response_model=dict)
+def update_version(
+    prompt_id: str,
+    version_id: str,
+    body: VersionUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    workspace = get_user_workspace(current_user, db)
+    db_prompt = db.query(Prompt).filter(Prompt.id == prompt_id, Prompt.workspace_id == workspace.id).first()
+    if not db_prompt:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+        
+    version = db.query(PromptVersion).filter(PromptVersion.id == version_id, PromptVersion.prompt_id == prompt_id).first()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+        
+    if body.systemPrompt is not None:
+        version.system_prompt = body.systemPrompt
+    if body.userTemplate is not None:
+        version.user_template = body.userTemplate
+    if body.commitMessage is not None:
+        version.commit_message = body.commitMessage
+        
+    db_prompt.updated_at = datetime.now(timezone.utc)
+    
+    db.commit()
+    db.refresh(version)
+    
     return {
         "version": {
             "id": str(version.id),

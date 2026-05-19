@@ -8,7 +8,8 @@ import {
   listPromptVersions,
   listPrompts,
   runPrompt as runPromptRequest,
-  updatePrompt
+  updatePrompt,
+  updatePromptVersion
 } from '../utils/api';
 import { cn, getVariableNames, timeAgo } from '../utils/helpers';
 
@@ -29,8 +30,19 @@ export default function PromptStudio({ promptId, onGoPrompts }) {
   const [copiedJSON, setCopiedJSON] = useState(false);
   const [copiedOutput, setCopiedOutput] = useState(false);
   const [error, setError] = useState('');
-  const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isCommitting, setIsCommitting] = useState(false);
+  const [showCommitInput, setShowCommitInput] = useState(false);
+  const [saveIndicator, setSaveIndicator] = useState(null);
+  
+  const [lastSavedContent, setLastSavedContent] = useState({
+    systemPrompt: '',
+    userTemplate: ''
+  });
+
+  const hasUnsavedChanges = 
+    systemPrompt !== lastSavedContent.systemPrompt || 
+    userTemplate !== lastSavedContent.userTemplate;
 
   const textAreaRef = useRef(null);
   const highlightRef = useRef(null);
@@ -67,7 +79,10 @@ export default function PromptStudio({ promptId, onGoPrompts }) {
         setUserTemplate(initialVersion?.userTemplate || '');
         setVariableValues({});
         setSelectedModelId(modelsList.find((model) => model.status === 'active')?.id || '');
-        setIsDirty(false);
+        setLastSavedContent({
+          systemPrompt: initialVersion?.systemPrompt || '',
+          userTemplate: initialVersion?.userTemplate || ''
+        });
         setError('');
       } catch (err) {
         if (!isMounted) {
@@ -176,14 +191,51 @@ export default function PromptStudio({ promptId, onGoPrompts }) {
     setUserTemplate(version.userTemplate || '');
     setVariableValues({});
     setCommitMessage('');
-    setIsDirty(false);
+    setShowCommitInput(false);
+    setLastSavedContent({
+      systemPrompt: version.systemPrompt || '',
+      userTemplate: version.userTemplate || ''
+    });
   };
 
-  const handleSaveVersion = async () => {
-    if (!prompt) return;
-    if (isSaving) return;
+  const showSaveIndicator = (message) => {
+    setSaveIndicator(message);
+    setTimeout(() => setSaveIndicator(null), 3000);
+  };
+
+  const handleSave = async () => {
+    if (!prompt || !activeVersion) return;
+    if (!hasUnsavedChanges || isSaving) return;
 
     setIsSaving(true);
+    try {
+      await updatePromptVersion(prompt.id, activeVersion.id, {
+        systemPrompt,
+        userTemplate
+      });
+
+      setLastSavedContent({ systemPrompt, userTemplate });
+      
+      setVersions(prev => prev.map(v => 
+        v.id === activeVersion.id 
+          ? { ...v, systemPrompt, userTemplate } 
+          : v
+      ));
+
+      showSaveIndicator('Saved ✓');
+      setError('');
+    } catch (err) {
+      setError(err.message || 'Failed to save prompt version.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleCommit = async () => {
+    if (!prompt) return;
+    if (!hasUnsavedChanges || isCommitting) return;
+
+    setIsCommitting(true);
     try {
       const nextVersion = await createPromptVersion(prompt.id, {
         systemPrompt,
@@ -191,16 +243,17 @@ export default function PromptStudio({ promptId, onGoPrompts }) {
         commitMessage: commitMessage.trim() || 'Saved version'
       });
 
-      const refreshedVersions = await listPromptVersions(prompt.id);
-      setVersions(refreshedVersions);
+      setVersions(prev => [nextVersion, ...prev]);
       setActiveVersion(nextVersion);
+      setLastSavedContent({ systemPrompt, userTemplate });
       setCommitMessage('');
-      setIsDirty(false);
+      setShowCommitInput(false);
+      showSaveIndicator(`Committed as ${nextVersion.versionDisplay} ✓`);
       setError('');
     } catch (err) {
-      setError(err.message || 'Failed to save prompt version.');
+      setError(err.message || 'Failed to create prompt version.');
     } finally {
-      setIsSaving(false);
+      setIsCommitting(false);
     }
   };
 
@@ -365,23 +418,47 @@ export default function PromptStudio({ promptId, onGoPrompts }) {
             ))}
           </div>
           <div className="shrink-0 border-t border-border p-3">
-            <div className="mb-2 text-[10px] text-text-muted">
-              {isDirty ? 'Unsaved local edits' : activeVersion ? `Last saved · ${timeAgo(activeVersion.createdAt)}` : ''}
+            <div className="mb-2 flex items-center justify-between text-[10px] text-text-muted">
+              <span>{hasUnsavedChanges ? 'Unsaved local edits' : activeVersion ? `Last saved · ${timeAgo(activeVersion.createdAt)}` : ''}</span>
+              <span className="font-medium text-primary">{saveIndicator}</span>
             </div>
-            <input
-              value={commitMessage}
-              onChange={(e) => setCommitMessage(e.target.value)}
-              placeholder="Commit message (optional)"
-              className="mb-2 h-8 w-full rounded border border-border bg-background px-2 text-xs text-text-main focus:border-primary/50 focus:outline-none"
-            />
-            <button 
-              onClick={handleSaveVersion} 
-              disabled={isSaving}
-              className="h-8 w-full rounded bg-primary text-xs font-bold text-panel transition-colors hover:bg-primary/90"
-              style={{ opacity: isSaving ? 0.6 : 1, cursor: isSaving ? 'not-allowed' : 'pointer' }}
-            >
-              {isSaving ? "Saving..." : "Save as new version"}
-            </button>
+            
+            {showCommitInput && (
+              <input
+                autoFocus
+                value={commitMessage}
+                onChange={e => setCommitMessage(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') handleCommit();
+                  if (e.key === 'Escape') {
+                    setShowCommitInput(false);
+                    setCommitMessage('');
+                  }
+                }}
+                placeholder="Describe what changed..."
+                className="mb-2 h-8 w-full rounded border border-border bg-background px-2 text-xs text-text-main focus:border-primary/50 focus:outline-none"
+              />
+            )}
+
+            <div className="flex gap-2">
+              <button 
+                onClick={handleSave} 
+                disabled={!hasUnsavedChanges || isSaving || isCommitting}
+                className="flex-1 h-8 rounded border border-border bg-transparent text-xs font-bold text-text-main transition-colors hover:bg-white/5 disabled:opacity-50"
+                style={{ cursor: (!hasUnsavedChanges || isSaving || isCommitting) ? 'not-allowed' : 'pointer' }}
+              >
+                {isSaving ? "Saving..." : hasUnsavedChanges ? "Save" : "Saved"}
+              </button>
+              
+              <button 
+                onClick={showCommitInput ? handleCommit : () => setShowCommitInput(true)}
+                disabled={!hasUnsavedChanges || isSaving || isCommitting}
+                className="flex-1 h-8 rounded bg-primary text-xs font-bold text-panel transition-colors hover:bg-primary/90 disabled:opacity-50"
+                style={{ cursor: (!hasUnsavedChanges || isSaving || isCommitting) ? 'not-allowed' : 'pointer' }}
+              >
+                {isCommitting ? "Committing..." : showCommitInput ? "Confirm Commit" : "Commit"}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -392,10 +469,7 @@ export default function PromptStudio({ promptId, onGoPrompts }) {
             </label>
             <textarea
               value={systemPrompt}
-              onChange={(e) => {
-                setSystemPrompt(e.target.value);
-                setIsDirty(true);
-              }}
+              onChange={(e) => setSystemPrompt(e.target.value)}
               className="min-h-[120px] w-full resize-y rounded-md border border-border bg-panel px-3 py-3 text-sm leading-relaxed transition-colors duration-150 focus:border-primary/50 focus:outline-none"
             />
           </div>
@@ -415,10 +489,7 @@ export default function PromptStudio({ promptId, onGoPrompts }) {
               <textarea
                 ref={textAreaRef}
                 value={userTemplate}
-                onChange={(e) => {
-                  setUserTemplate(e.target.value);
-                  setIsDirty(true);
-                }}
+                onChange={(e) => setUserTemplate(e.target.value)}
                 onScroll={handleScrollSync}
                 className="absolute inset-0 h-full w-full resize-y bg-transparent p-3 caret-primary text-transparent focus:outline-none"
                 style={{ color: 'transparent', WebkitTextFillColor: 'transparent', lineHeight: 1.6, fontSize: 14 }}
@@ -440,10 +511,7 @@ export default function PromptStudio({ promptId, onGoPrompts }) {
                     <label className="mb-1 block text-xs font-mono text-primary">{name}</label>
                     <input
                       value={variableValues[name] || ''}
-                      onChange={(e) => {
-                        setVariableValues((prev) => ({ ...prev, [name]: e.target.value }));
-                        setIsDirty(true);
-                      }}
+                      onChange={(e) => setVariableValues((prev) => ({ ...prev, [name]: e.target.value }))}
                       className="h-9 w-full rounded border border-border bg-panel px-2 text-sm text-text-main transition-colors duration-150 focus:border-primary/50 focus:outline-none"
                     />
                   </div>

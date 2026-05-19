@@ -296,6 +296,14 @@ export async function createPromptVersion(promptId, payload) {
   return normalizeVersion(data.version);
 }
 
+export async function updatePromptVersion(promptId, versionId, payload) {
+  const data = await fetchJson(`/api/prompts/${promptId}/versions/${versionId}`, {
+    method: 'PATCH',
+    body: payload
+  });
+  return normalizeVersion(data.version);
+}
+
 export async function listDatasets(params) {
   const data = await fetchJson('/api/datasets', { query: params });
   return (data.datasets || []).map(normalizeDataset);
