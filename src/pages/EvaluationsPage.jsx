@@ -4,9 +4,10 @@ import {
   Coins, ChevronRight, BarChart2, Table, ChevronDown,
   ChevronUp, MessageSquare, Play, X, Info, Settings
 } from 'lucide-react';
-import { cn } from '../utils/helpers';
+import { cn, timeAgo } from '../utils/helpers';
 import {
   getDataset,
+  listBatches,
   listDatasets,
   listExperiments,
   listModels,
@@ -387,8 +388,14 @@ function Selector({ label, value, onChange, experiments }) {
 
 function BatchEvalView({ experiments, setExperiments, datasets, models, prompts, fetchDatasetDetail, onExperimentsAdded, onUpdateExperiment }) {
   const [viewMode, setViewMode] = useState('existing');
-  const [selectedDatasetId, setSelectedDatasetId] = useState('all');
-  const [selectedVersion, setSelectedVersion] = useState('all');
+  
+  // Batch selector state
+  const [batches, setBatches] = useState([]);
+  const [selectedBatchId, setSelectedBatchId] = useState(null);
+  const [batchExperiments, setBatchExperiments] = useState([]);
+  const [isBatchLoading, setIsBatchLoading] = useState(false);
+  
+  // Other state
   const [expandedRows, setExpandedRows] = useState(new Set());
   const [isAIScoringOpen, setIsAIScoringOpen] = useState(false);
   const [scoringProgress, setScoringProgress] = useState(null);
@@ -402,6 +409,26 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
   const [isRunningBatch, setIsRunningBatch] = useState(false);
   const [batchResult, setBatchResult] = useState(null);
   const [promptVersions, setPromptVersions] = useState([]);
+
+  // Load batches on mount
+  useEffect(() => {
+    listBatches().then((result) => {
+      setBatches(result);
+      if (result.length > 0 && !selectedBatchId) {
+        setSelectedBatchId(result[0].batchId);
+      }
+    }).catch(() => setBatches([]));
+  }, []);
+
+  // Load experiments for selected batch
+  useEffect(() => {
+    if (!selectedBatchId) return;
+    setIsBatchLoading(true);
+    listExperiments({ batchId: selectedBatchId })
+      .then((result) => setBatchExperiments(result))
+      .catch(() => setBatchExperiments([]))
+      .finally(() => setIsBatchLoading(false));
+  }, [selectedBatchId]);
 
   useEffect(() => {
     if (!newBatchPromptId) {
@@ -440,20 +467,19 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
   }, [successBanner]);
 
   const datasetExps = useMemo(() => {
-    let filtered = experiments;
-    if (selectedDatasetId !== 'all') {
-      filtered = filtered.filter((experiment) => experiment.datasetId === selectedDatasetId);
-    }
-    if (selectedVersion !== 'all') {
-      filtered = filtered.filter((experiment) => experiment.promptVersion === selectedVersion);
-    }
-    return filtered;
-  }, [experiments, selectedDatasetId, selectedVersion]);
+    return selectedBatchId ? batchExperiments : experiments;
+  }, [batchExperiments, experiments, selectedBatchId]);
 
-  const uniqueVersions = useMemo(() => {
-    const scoped = selectedDatasetId === 'all' ? experiments : experiments.filter((experiment) => experiment.datasetId === selectedDatasetId);
-    return Array.from(new Set(scoped.map((experiment) => experiment.promptVersion).filter(Boolean)));
-  }, [experiments, selectedDatasetId]);
+  // Compute per-row overall from actual scores (excluding Toxicity)
+  const getOverall = (experiment) => {
+    if (!experiment.scores || Object.keys(experiment.scores).length === 0) return null;
+    const scoreable = Object.entries(experiment.scores)
+      .filter(([metric]) => metric !== 'Toxicity')
+      .map(([, score]) => score)
+      .filter((s) => s != null);
+    if (scoreable.length === 0) return null;
+    return Math.round(scoreable.reduce((a, b) => a + b, 0) / scoreable.length);
+  };
 
   const summary = useMemo(() => {
     const scoredExperiments = datasetExps.filter((experiment) => experiment.scores && Object.keys(experiment.scores).length > 0);
@@ -515,9 +541,13 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
       onExperimentsAdded(result.experiments || []);
       setBatchResult({ successCount: result.successCount, failCount: result.failCount });
       setSuccessBanner(`Batch complete — ${result.successCount} experiments logged (${result.failCount} failed)`);
-      setSelectedDatasetId(newBatchDatasetId);
-      const selectedVersionItem = promptVersions.find((version) => version.id === newBatchVersionId);
-      setSelectedVersion(selectedVersionItem?.promptVersion || selectedVersionItem?.versionDisplay || `v${selectedVersionItem?.version}`);
+
+      // Refresh batch list and auto-select the new batch
+      const freshBatches = await listBatches();
+      setBatches(freshBatches);
+      const newBatch = result.experiments?.[0]?.batchId;
+      if (newBatch) setSelectedBatchId(newBatch);
+
       setViewMode('existing');
     } catch {
       setSuccessBanner('');
@@ -556,7 +586,9 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
         });
 
         if (result.updatedExperiment) {
+          // Update both the global experiments store and the local batchExperiments view
           setExperiments((prev) => prev.map((e) => e.id === experiment.id ? result.updatedExperiment : e));
+          setBatchExperiments((prev) => prev.map((e) => e.id === experiment.id ? result.updatedExperiment : e));
           console.log(`Row scored by ${result.scorerModelName}`);
         }
       } catch (err) {
@@ -564,7 +596,8 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
         // Keep the run moving if one item fails to score.
       }
 
-      await new Promise(r => setTimeout(r, 300));
+      // 3s delay — Groq free tier TPM limit is hit quickly with consecutive requests
+      await new Promise(r => setTimeout(r, 3000));
     }
 
     setScoringProgress(null);
@@ -678,12 +711,14 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
                           : 'transparent',
                         color: selectedBatchId === batch.batchId ? '#88d273' : 'var(--text-muted)',
                         cursor: 'pointer',
-                        fontSize: 12
+                        fontSize: 12,
+                        borderStyle: batch.batchId === 'ungrouped' ? 'dashed' : 'solid',
+                        opacity: batch.batchId === 'ungrouped' ? 0.7 : 1
                       }}
                     >
                       <span>{batch.batchName}</span>
                       <span style={{ marginLeft: 8, opacity: 0.6 }}>
-                        {batch.successCount}/{batch.rowCount} rows
+                        {batch.successCount}/{batch.rowCount} runs
                       </span>
                       <span style={{ marginLeft: 8, opacity: 0.5, fontSize: 11 }}>
                         {timeAgo(batch.createdAt)}
@@ -694,7 +729,7 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
 
                 {batches.length === 0 && (
                   <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 8 }}>
-                    No batch runs yet — run a batch from the "Run New Batch" tab first.
+                    No batch runs yet — run a batch from the &quot;Run New Batch&quot; tab first.
                   </p>
                 )}
               </div>
@@ -868,7 +903,7 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
 
       {isAIScoringOpen && (
         <AIScoringModal
-          dataset={datasets.find((dataset) => dataset.id === selectedDatasetId)}
+          dataset={datasets.find((dataset) => dataset.id === (datasetExps.length > 0 ? datasetExps[0].datasetId : null))}
           activeModels={models.filter(m => m.status === 'active')}
           onCancel={() => setIsAIScoringOpen(false)}
           onConfirm={handleRunAIScoring}

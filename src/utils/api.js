@@ -407,3 +407,8 @@ export async function scoreEvaluation(payload) {
     updatedExperiment: data.updatedExperiment ? normalizeExperiment(data.updatedExperiment) : null
   };
 }
+
+export async function listBatches() {
+  const data = await fetchJson('/api/experiments/batches');
+  return data.batches || [];
+}

@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
-from sqlalchemy import func, cast, Text, or_
+from sqlalchemy import func, cast, Text, or_, Integer
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -56,6 +56,70 @@ def format_experiment(exp: Experiment) -> dict:
     }
 
 
+@router.get("/batches")
+def get_batches(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get all distinct batch runs with metadata, including an ungrouped entry"""
+    workspace = get_user_workspace(current_user, db)
+
+    # Get grouped batches
+    batches = db.query(
+        Experiment.batch_id,
+        Experiment.batch_name,
+        func.count(Experiment.id).label('row_count'),
+        func.sum(func.cast(Experiment.status == 'success', Integer)).label('success_count'),
+        func.max(Experiment.created_at).label('created_at')
+    ).filter(
+        Experiment.workspace_id == workspace.id,
+        Experiment.batch_id.isnot(None)
+    ).group_by(
+        Experiment.batch_id,
+        Experiment.batch_name
+    ).order_by(
+        func.max(Experiment.created_at).desc()
+    ).all()
+
+    result = [
+        {
+            "batchId": b.batch_id,
+            "batchName": b.batch_name,
+            "rowCount": b.row_count,
+            "successCount": b.success_count,
+            "createdAt": b.created_at.isoformat() if b.created_at else ""
+        }
+        for b in batches
+    ]
+
+    # Also count ungrouped experiments (batch_id is null)
+    ungrouped_count = db.query(func.count(Experiment.id)).filter(
+        Experiment.workspace_id == workspace.id,
+        Experiment.batch_id.is_(None)
+    ).scalar()
+
+    ungrouped_success = db.query(func.count(Experiment.id)).filter(
+        Experiment.workspace_id == workspace.id,
+        Experiment.batch_id.is_(None),
+        Experiment.status == 'success'
+    ).scalar()
+
+    ungrouped_latest = db.query(func.max(Experiment.created_at)).filter(
+        Experiment.workspace_id == workspace.id,
+        Experiment.batch_id.is_(None)
+    ).scalar()
+
+    if ungrouped_count and ungrouped_count > 0:
+        result.append({
+            "batchId": "ungrouped",
+            "batchName": "Individual Runs (no batch)",
+            "rowCount": ungrouped_count,
+            "successCount": ungrouped_success or 0,
+            "createdAt": ungrouped_latest.isoformat() if ungrouped_latest else None
+        })
+
+    return { "batches": result }
+
 @router.get("")
 def list_experiments(
     search: Optional[str] = None,
@@ -65,6 +129,7 @@ def list_experiments(
     status: Optional[str] = None,
     date_range: Optional[str] = Query(None, alias="dateRange"),
     dataset_id: Optional[str] = Query(None, alias="datasetId"),
+    batch_id: Optional[str] = Query(None, alias="batchId"),
     sort_field: Optional[str] = Query("created_at", alias="sortField"),
     sort_dir: Optional[str] = Query("desc", alias="sortDir"),
     current_user: User = Depends(get_current_user),
@@ -101,6 +166,11 @@ def list_experiments(
     
     if dataset_id:
         query = query.filter(Experiment.dataset_id == dataset_id)
+    
+    if batch_id == "ungrouped":
+        query = query.filter(Experiment.batch_id.is_(None))
+    elif batch_id:
+        query = query.filter(Experiment.batch_id == batch_id)
     
     # Apply date range filter
     if date_range:
