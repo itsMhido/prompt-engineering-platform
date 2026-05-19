@@ -1,90 +1,160 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-  CheckCircle2, FlaskConical, AlertCircle, TrendingUp, Zap, 
-  Coins, ChevronRight, BarChart2, Table, ChevronDown, 
+import { Fragment, useEffect, useMemo, useState } from 'react';
+import {
+  CheckCircle2, FlaskConical, AlertCircle, TrendingUp, Zap,
+  Coins, ChevronRight, BarChart2, Table, ChevronDown,
   ChevronUp, MessageSquare, Play, X, Info, Settings
 } from 'lucide-react';
-import { cn, readLocalStorageJSON, writeLocalStorageJSON, timeAgo } from '../utils/helpers';
-import { loadModels } from '../utils/mockApi';
-import { callModel } from '../utils/callModel';
+import { cn } from '../utils/helpers';
+import {
+  getDataset,
+  listDatasets,
+  listExperiments,
+  listModels,
+  listPrompts,
+  listPromptVersions,
+  runBatchEvaluation,
+  scoreEvaluation,
+  updateExperiment
+} from '../utils/api';
 
-const EXPERIMENTS_KEY = 'pe_experiments';
-const DATASETS_KEY = 'pe_datasets';
 const METRICS = ['Relevance', 'Correctness', 'Toxicity', 'Fluency'];
 
+function buildGroupedScores(experiments, key) {
+  const groups = {};
+  experiments.forEach((experiment) => {
+    const value = experiment[key] || 'Unknown';
+    if (!groups[value]) {
+      groups[value] = {
+        name: value,
+        runs: 0,
+        prompt: experiment.promptName || 'Unknown Prompt',
+        Relevance: 0,
+        Correctness: 0,
+        Toxicity: 0,
+        Overall: 0,
+        counts: { Relevance: 0, Correctness: 0, Toxicity: 0 }
+      };
+    }
+
+    groups[value].runs += 1;
+    let rowTotal = 0;
+    let count = 0;
+    METRICS.forEach((metric) => {
+      if (experiment.scores[metric] !== undefined) {
+        groups[value][metric] += experiment.scores[metric];
+        groups[value].counts[metric] += 1;
+        rowTotal += experiment.scores[metric];
+        count += 1;
+      }
+    });
+    if (count > 0) {
+      groups[value].Overall += rowTotal / count;
+    }
+  });
+
+  return Object.values(groups).map((group) => ({
+    ...group,
+    Relevance: group.counts.Relevance > 0 ? (group.Relevance / group.counts.Relevance).toFixed(1) : '0.0',
+    Correctness: group.counts.Correctness > 0 ? (group.Correctness / group.counts.Correctness).toFixed(1) : '0.0',
+    Toxicity: group.counts.Toxicity > 0 ? (group.Toxicity / group.counts.Toxicity).toFixed(1) : '0.0',
+    Overall: (group.Overall / group.runs).toFixed(1)
+  })).sort((left, right) => parseFloat(right.Overall) - parseFloat(left.Overall));
+}
+
 export default function EvaluationsPage() {
-  const [activeTab, setActiveTab] = useState('overview'); // 'overview' | 'comparison' | 'batch'
+  const [activeTab, setActiveTab] = useState('overview');
   const [experiments, setExperiments] = useState([]);
   const [datasets, setDatasets] = useState([]);
   const [models, setModels] = useState([]);
+  const [prompts, setPrompts] = useState([]);
+  const [datasetDetails, setDatasetDetails] = useState({});
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    const loadedExps = readLocalStorageJSON(EXPERIMENTS_KEY, []);
-    const loadedDatasets = readLocalStorageJSON(DATASETS_KEY, []);
-    setExperiments(loadedExps);
-    setDatasets(loadedDatasets);
-    loadModels().then(setModels);
+    (async () => {
+      try {
+        const [loadedExperiments, loadedDatasets, loadedModels, loadedPrompts] = await Promise.all([
+          listExperiments(),
+          listDatasets(),
+          listModels(),
+          listPrompts()
+        ]);
+
+        setExperiments(loadedExperiments);
+        setDatasets(loadedDatasets);
+        setModels(loadedModels);
+        setPrompts(loadedPrompts);
+      } catch (err) {
+        setError(err.message || 'Failed to load evaluations data.');
+      }
+    })();
   }, []);
 
-  const handleUpdateExperiment = (updatedExp) => {
-    const next = experiments.map(e => e.id === updatedExp.id ? updatedExp : e);
-    setExperiments(next);
-    writeLocalStorageJSON(EXPERIMENTS_KEY, next);
+  const fetchDatasetDetail = async (datasetId) => {
+    if (!datasetId) {
+      return null;
+    }
+
+    if (datasetDetails[datasetId]) {
+      return datasetDetails[datasetId];
+    }
+
+    const detail = await getDataset(datasetId);
+    setDatasetDetails((prev) => ({ ...prev, [datasetId]: detail }));
+    return detail;
+  };
+
+  const handleUpdateExperiment = async (updatedExp) => {
+    try {
+      const saved = await updateExperiment(updatedExp.id, {
+        score: updatedExp.score,
+        notes: updatedExp.notes,
+        tags: updatedExp.tags,
+        scores: updatedExp.scores,
+        reasoning: updatedExp.reasoning
+      });
+      setExperiments((prev) => prev.map((experiment) => experiment.id === saved.id ? saved : experiment));
+    } catch (err) {
+      setError(err.message || 'Failed to update evaluation.');
+    }
   };
 
   return (
-    <div className="h-full flex flex-col overflow-hidden bg-background">
-      {/* Top Navigation & Tabs */}
-      <div className="px-8 pt-8 shrink-0 bg-background">
-        <div className="flex justify-between items-center mb-6 pb-4 border-b border-border">
+    <div className="flex h-full flex-col overflow-hidden bg-background">
+      <div className="shrink-0 bg-background px-8 pt-8">
+        <div className="mb-6 flex items-center justify-between border-b border-border pb-4">
           <div>
-            <h2 className="text-2xl font-bold tracking-tight mb-1 text-text-main">Evaluations</h2>
+            <h2 className="mb-1 text-2xl font-bold tracking-tight text-text-main">Evaluations</h2>
             <p className="text-text-muted">Compare outputs and metrics side-by-side.</p>
           </div>
-          <div className="flex bg-panel border border-border p-1 rounded-lg">
-            <button 
-              onClick={() => setActiveTab('overview')}
-              className={cn(
-                "flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all",
-                activeTab === 'overview' ? "bg-background text-primary shadow-sm" : "text-text-muted hover:text-text-main"
-              )}
-            >
-              <TrendingUp size={16} /> Overview
-            </button>
-            <button 
-              onClick={() => setActiveTab('comparison')}
-              className={cn(
-                "flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all",
-                activeTab === 'comparison' ? "bg-background text-primary shadow-sm" : "text-text-muted hover:text-text-main"
-              )}
-            >
-              <BarChart2 size={16} /> Comparison
-            </button>
-            <button 
-              onClick={() => setActiveTab('batch')}
-              className={cn(
-                "flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-all",
-                activeTab === 'batch' ? "bg-background text-primary shadow-sm" : "text-text-muted hover:text-text-main"
-              )}
-            >
-              <Table size={16} /> Batch Eval
-            </button>
+          <div className="flex rounded-lg border border-border bg-panel p-1">
+            <TabButton active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} icon={<TrendingUp size={16} />}>Overview</TabButton>
+            <TabButton active={activeTab === 'comparison'} onClick={() => setActiveTab('comparison')} icon={<BarChart2 size={16} />}>Comparison</TabButton>
+            <TabButton active={activeTab === 'batch'} onClick={() => setActiveTab('batch')} icon={<Table size={16} />}>Batch Eval</TabButton>
           </div>
         </div>
       </div>
+
+      {error && (
+        <div className="mx-8 mb-4 rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          {error}
+        </div>
+      )}
 
       <div className="flex-1 overflow-hidden">
         {activeTab === 'overview' ? (
           <OverviewView experiments={experiments} setActiveTab={setActiveTab} />
         ) : activeTab === 'comparison' ? (
-          <ComparisonView experiments={experiments} datasets={datasets} onUpdateExps={setExperiments} />
+          <ComparisonView experiments={experiments} datasets={datasets} onUpdateExperiment={handleUpdateExperiment} />
         ) : (
-          <BatchEvalView 
-            experiments={experiments} 
-            datasets={datasets} 
+          <BatchEvalView
+            experiments={experiments}
+            datasets={datasets}
             models={models}
-            onUpdateExperiment={handleUpdateExperiment} 
-            onUpdateExps={setExperiments}
+            prompts={prompts}
+            fetchDatasetDetail={fetchDatasetDetail}
+            onExperimentsAdded={(newExperiments) => setExperiments((prev) => [...newExperiments, ...prev])}
+            onUpdateExperiment={handleUpdateExperiment}
           />
         )}
       </div>
@@ -92,108 +162,77 @@ export default function EvaluationsPage() {
   );
 }
 
+function TabButton({ active, onClick, icon, children }) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-all',
+        active ? 'bg-background text-primary shadow-sm' : 'text-text-muted hover:text-text-main'
+      )}
+    >
+      {icon} {children}
+    </button>
+  );
+}
+
 function OverviewView({ experiments, setActiveTab }) {
-  const scoredExperiments = useMemo(() => experiments.filter(e => e.scores && Object.keys(e.scores).length > 0), [experiments]);
+  const scoredExperiments = useMemo(() => experiments.filter((experiment) => experiment.scores && Object.keys(experiment.scores).length > 0), [experiments]);
 
   const stats = useMemo(() => {
-    if (scoredExperiments.length === 0) return null;
-    
+    if (scoredExperiments.length === 0) {
+      return null;
+    }
+
     const averages = { Relevance: 0, Correctness: 0, Toxicity: 0, Overall: 0 };
-    scoredExperiments.forEach(e => {
+    scoredExperiments.forEach((experiment) => {
       let rowTotal = 0;
       let count = 0;
-      METRICS.forEach(m => {
-        if (e.scores[m] !== undefined) {
-          averages[m] = (averages[m] || 0) + e.scores[m];
-          rowTotal += e.scores[m];
-          count++;
+      METRICS.forEach((metric) => {
+        if (experiment.scores[metric] !== undefined) {
+          averages[metric] = (averages[metric] || 0) + experiment.scores[metric];
+          rowTotal += experiment.scores[metric];
+          count += 1;
         }
       });
-      if (count > 0) averages.Overall += (rowTotal / count);
+      if (count > 0) {
+        averages.Overall += rowTotal / count;
+      }
     });
 
     return {
       totalEvaluated: scoredExperiments.length,
-      avgRelevance: (averages.Relevance / (scoredExperiments.filter(e => e.scores.Relevance !== undefined).length || 1)).toFixed(1),
-      avgCorrectness: (averages.Correctness / (scoredExperiments.filter(e => e.scores.Correctness !== undefined).length || 1)).toFixed(1),
-      avgToxicity: (averages.Toxicity / (scoredExperiments.filter(e => e.scores.Toxicity !== undefined).length || 1)).toFixed(1),
+      avgRelevance: (averages.Relevance / (scoredExperiments.filter((experiment) => experiment.scores.Relevance !== undefined).length || 1)).toFixed(1),
+      avgCorrectness: (averages.Correctness / (scoredExperiments.filter((experiment) => experiment.scores.Correctness !== undefined).length || 1)).toFixed(1),
+      avgToxicity: (averages.Toxicity / (scoredExperiments.filter((experiment) => experiment.scores.Toxicity !== undefined).length || 1)).toFixed(1),
       avgOverall: (averages.Overall / scoredExperiments.length).toFixed(1)
     };
   }, [scoredExperiments]);
 
-  const groupBy = (key) => {
-    const groups = {};
-    scoredExperiments.forEach(e => {
-      const val = e[key] || 'Unknown';
-      if (!groups[val]) groups[val] = { name: val, runs: 0, prompt: e.promptName || 'Unknown Prompt', Relevance: 0, Correctness: 0, Toxicity: 0, Overall: 0, counts: { Relevance: 0, Correctness: 0, Toxicity: 0 } };
-      groups[val].runs++;
-      let rowTotal = 0;
-      let count = 0;
-      METRICS.forEach(m => {
-        if (e.scores[m] !== undefined) {
-          groups[val][m] += e.scores[m];
-          groups[val].counts[m]++;
-          rowTotal += e.scores[m];
-          count++;
-        }
-      });
-      if (count > 0) groups[val].Overall += (rowTotal / count);
-    });
-
-    return Object.values(groups).map(g => ({
-      ...g,
-      Relevance: g.counts.Relevance > 0 ? (g.Relevance / g.counts.Relevance).toFixed(1) : '0.0',
-      Correctness: g.counts.Correctness > 0 ? (g.Correctness / g.counts.Correctness).toFixed(1) : '0.0',
-      Toxicity: g.counts.Toxicity > 0 ? (g.Toxicity / g.counts.Toxicity).toFixed(1) : '0.0',
-      Overall: (g.Overall / g.runs).toFixed(1)
-    })).sort((a, b) => parseFloat(b.Overall) - parseFloat(a.Overall));
-  };
-
-  const modelComparison = useMemo(() => groupBy('modelId'), [scoredExperiments]);
-  const versionComparison = useMemo(() => groupBy('version'), [scoredExperiments]);
-
-  const distributions = useMemo(() => {
-    const dist = {};
-    METRICS.forEach(m => {
-      dist[m] = [0, 0, 0, 0]; // 0-25, 26-50, 51-75, 76-100
-      scoredExperiments.forEach(e => {
-        const s = e.scores[m];
-        if (s !== undefined) {
-          if (s <= 25) dist[m][0]++;
-          else if (s <= 50) dist[m][1]++;
-          else if (s <= 75) dist[m][2]++;
-          else dist[m][3]++;
-        }
-      });
-    });
-    return dist;
-  }, [scoredExperiments]);
+  const modelComparison = useMemo(() => buildGroupedScores(scoredExperiments, 'modelName'), [scoredExperiments]);
+  const versionComparison = useMemo(() => buildGroupedScores(scoredExperiments, 'promptVersion'), [scoredExperiments]);
 
   if (scoredExperiments.length === 0) {
     return (
-      <div className="h-full flex flex-col items-center justify-center p-8 animate-in fade-in duration-500">
-        <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center text-primary mb-6">
+      <div className="flex h-full flex-col items-center justify-center p-8 animate-in fade-in duration-500">
+        <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-primary/10 text-primary">
           <TrendingUp size={40} />
         </div>
-        <h2 className="text-2xl font-bold mb-2 text-text-main">No evaluated data yet</h2>
-        <p className="text-text-muted text-center max-w-md mb-8">
+        <h2 className="mb-2 text-2xl font-bold text-text-main">No evaluated data yet</h2>
+        <p className="mb-8 max-w-md text-center text-text-muted">
           You need to score some experiments in the Batch Eval tab to see aggregate metrics here.
         </p>
-        <button 
-          onClick={() => setActiveTab('batch')}
-          className="px-6 py-3 bg-primary text-panel font-bold rounded-lg hover:bg-primary/90 transition-all flex items-center gap-2"
-        >
+        <button onClick={() => setActiveTab('batch')} className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 font-bold text-panel transition-all hover:bg-primary/90">
           Go to Batch Eval <ChevronRight size={18} />
         </button>
       </div>
     );
   }
 
-  const findMax = (arr, key) => Math.max(...arr.map(x => parseFloat(x[key])));
+  const findMax = (rows, key) => Math.max(...rows.map((row) => parseFloat(row[key])));
 
   return (
-    <div className="p-8 h-full overflow-y-auto animate-in fade-in duration-300 space-y-10 pb-20">
-      {/* Top Stats */}
+    <div className="h-full space-y-10 overflow-y-auto p-8 pb-20 animate-in fade-in duration-300">
       <div className="grid grid-cols-5 gap-6">
         <StatCard label="Scored Experiments" value={stats.totalEvaluated} icon={<FlaskConical size={18} />} />
         <StatCard label="Avg Relevance" value={`${stats.avgRelevance}%`} icon={<TrendingUp size={18} />} color="text-primary" />
@@ -203,115 +242,59 @@ function OverviewView({ experiments, setActiveTab }) {
       </div>
 
       <div className="grid grid-cols-2 gap-8">
-        {/* Model Comparison */}
-        <div className="space-y-4">
-          <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-text-muted ml-1">Performance by Model</h3>
-          <div className="border border-border rounded-xl overflow-hidden bg-panel/30">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="bg-background/50 border-b border-border">
-                  <th className="px-4 py-3 text-[10px] font-bold text-text-muted uppercase tracking-widest">Model</th>
-                  <th className="px-4 py-3 text-[10px] font-bold text-text-muted uppercase tracking-widest">Prompt</th>
-                  <th className="px-4 py-3 text-[10px] font-bold text-text-muted uppercase tracking-widest text-center">Runs</th>
-                  <th className="px-4 py-3 text-[10px] font-bold text-text-muted uppercase tracking-widest text-center">Relevance</th>
-                  <th className="px-4 py-3 text-[10px] font-bold text-text-muted uppercase tracking-widest text-center">Overall</th>
-                </tr>
-              </thead>
-              <tbody>
-                {modelComparison.map(m => (
-                  <tr key={m.name} className="border-b border-border/50 last:border-0 hover:bg-white/[0.02]">
-                    <td className="px-4 py-3 font-mono text-xs text-text-main">{m.name}</td>
-                    <td className="px-4 py-3 text-xs text-text-muted">{m.prompt}</td>
-                    <td className="px-4 py-3 text-center text-text-muted">{m.runs}</td>
-                    <td className={cn("px-4 py-3 text-center font-mono", parseFloat(m.Relevance) === findMax(modelComparison, 'Relevance') && "text-primary bg-primary/5")}>{m.Relevance}%</td>
-                    <td className={cn("px-4 py-3 text-center font-mono font-bold", parseFloat(m.Overall) === findMax(modelComparison, 'Overall') ? "text-primary bg-primary/10" : "text-text-main")}>{m.Overall}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Version Comparison */}
-        <div className="space-y-4">
-          <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-text-muted ml-1">Performance by Version</h3>
-          <div className="border border-border rounded-xl overflow-hidden bg-panel/30">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="bg-background/50 border-b border-border">
-                  <th className="px-4 py-3 text-[10px] font-bold text-text-muted uppercase tracking-widest">Version</th>
-                  <th className="px-4 py-3 text-[10px] font-bold text-text-muted uppercase tracking-widest">Prompt</th>
-                  <th className="px-4 py-3 text-[10px] font-bold text-text-muted uppercase tracking-widest text-center">Runs</th>
-                  <th className="px-4 py-3 text-[10px] font-bold text-text-muted uppercase tracking-widest text-center">Correctness</th>
-                  <th className="px-4 py-3 text-[10px] font-bold text-text-muted uppercase tracking-widest text-center">Overall</th>
-                </tr>
-              </thead>
-              <tbody>
-                {versionComparison.map(v => (
-                  <tr key={v.name} className="border-b border-border/50 last:border-0 hover:bg-white/[0.02]">
-                    <td className="px-4 py-3 font-mono text-xs text-text-main">{v.name}</td>
-                    <td className="px-4 py-3 text-xs text-text-muted">{v.prompt}</td>
-                    <td className="px-4 py-3 text-center text-text-muted">{v.runs}</td>
-                    <td className={cn("px-4 py-3 text-center font-mono", parseFloat(v.Correctness) === findMax(versionComparison, 'Correctness') && "text-primary bg-primary/5")}>{v.Correctness}%</td>
-                    <td className={cn("px-4 py-3 text-center font-mono font-bold", parseFloat(v.Overall) === findMax(versionComparison, 'Overall') ? "text-primary bg-primary/10" : "text-text-main")}>{v.Overall}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      {/* Distribution Bars */}
-      <div className="space-y-6">
-        <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-text-muted ml-1">Score Distributions</h3>
-        <div className="grid grid-cols-2 gap-x-12 gap-y-8 bg-panel/30 border border-border p-8 rounded-2xl">
-          {METRICS.map(m => (
-            <div key={m} className="space-y-3">
-              <div className="flex justify-between items-end">
-                <label className="text-xs font-bold text-text-main">{m}</label>
-                <span className="text-[10px] text-text-muted">
-                  {Math.round((distributions[m][3] / scoredExperiments.length) * 100)}% scored above 75%
-                </span>
-              </div>
-              <div className="flex h-3 w-full rounded-full overflow-hidden border border-border/50">
-                <div className="bg-red-500/80 transition-all" style={{ width: `${(distributions[m][0] / scoredExperiments.length) * 100}%` }} title="0-25%" />
-                <div className="bg-orange-500/80 transition-all" style={{ width: `${(distributions[m][1] / scoredExperiments.length) * 100}%` }} title="26-50%" />
-                <div className="bg-yellow-500/80 transition-all" style={{ width: `${(distributions[m][2] / scoredExperiments.length) * 100}%` }} title="51-75%" />
-                <div className="bg-primary transition-all" style={{ width: `${(distributions[m][3] / scoredExperiments.length) * 100}%` }} title="76-100%" />
-              </div>
-              <div className="flex justify-between text-[8px] text-text-muted font-mono px-1">
-                <span>0%</span>
-                <span>25</span>
-                <span>50</span>
-                <span>75</span>
-                <span>100%</span>
-              </div>
-            </div>
-          ))}
-        </div>
+        <ComparisonTable title="Performance by Model" rows={modelComparison} primaryColumn="name" secondaryColumn="prompt" highlightKey="Relevance" overallKey="Overall" findMax={findMax} />
+        <ComparisonTable title="Performance by Version" rows={versionComparison} primaryColumn="name" secondaryColumn="prompt" highlightKey="Correctness" overallKey="Overall" findMax={findMax} />
       </div>
     </div>
   );
 }
 
-function StatCard({ label, value, icon, color = "text-text-main", highlight = false }) {
+function ComparisonTable({ title, rows, primaryColumn, secondaryColumn, highlightKey, overallKey, findMax }) {
   return (
-    <div className={cn(
-      "glass-panel rounded-2xl p-5 flex flex-col gap-3 relative overflow-hidden transition-all hover:scale-[1.02]",
-      highlight ? "border-primary/50 bg-primary/5 ring-1 ring-primary/20" : "border-border"
-    )}>
-      <div className="flex justify-between items-start">
+    <div className="space-y-4">
+      <h3 className="ml-1 text-sm font-bold uppercase tracking-[0.2em] text-text-muted">{title}</h3>
+      <div className="overflow-hidden rounded-xl border border-border bg-panel/30">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-border bg-background/50">
+              <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-text-muted">Name</th>
+              <th className="px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-text-muted">Prompt</th>
+              <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-widest text-text-muted">Runs</th>
+              <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-widest text-text-muted">{highlightKey}</th>
+              <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-widest text-text-muted">Overall</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.name} className="border-b border-border/50 last:border-0 hover:bg-white/[0.02]">
+                <td className="px-4 py-3 font-mono text-xs text-text-main">{row[primaryColumn]}</td>
+                <td className="px-4 py-3 text-xs text-text-muted">{row[secondaryColumn]}</td>
+                <td className="px-4 py-3 text-center text-text-muted">{row.runs}</td>
+                <td className={cn('px-4 py-3 text-center font-mono', parseFloat(row[highlightKey]) === findMax(rows, highlightKey) && 'bg-primary/5 text-primary')}>{row[highlightKey]}%</td>
+                <td className={cn('px-4 py-3 text-center font-mono font-bold', parseFloat(row[overallKey]) === findMax(rows, overallKey) ? 'bg-primary/10 text-primary' : 'text-text-main')}>{row[overallKey]}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ label, value, icon, color = 'text-text-main', highlight = false }) {
+  return (
+    <div className={cn('glass-panel relative flex flex-col gap-3 overflow-hidden rounded-2xl p-5 transition-all hover:scale-[1.02]', highlight ? 'border-primary/50 bg-primary/5 ring-1 ring-primary/20' : 'border-border')}>
+      <div className="flex items-start justify-between">
         <span className="text-[10px] font-bold uppercase tracking-widest text-text-muted">{label}</span>
         <div className="text-text-muted opacity-30">{icon}</div>
       </div>
-      <div className={cn("text-3xl font-black tracking-tight", color)}>{value}</div>
-      {highlight && <div className="absolute -right-4 -bottom-4 w-16 h-16 bg-primary/10 rounded-full blur-2xl" />}
+      <div className={cn('text-3xl font-black tracking-tight', color)}>{value}</div>
+      {highlight && <div className="absolute -bottom-4 -right-4 h-16 w-16 rounded-full bg-primary/10 blur-2xl" />}
     </div>
   );
 }
 
-function ComparisonView({ experiments, datasets, onUpdateExps }) {
+function ComparisonView({ experiments, datasets, onUpdateExperiment }) {
   const [selectedDatasetId, setSelectedDatasetId] = useState('all');
   const [expAId, setExpAId] = useState('');
   const [expBId, setExpBId] = useState('');
@@ -319,48 +302,38 @@ function ComparisonView({ experiments, datasets, onUpdateExps }) {
   useEffect(() => {
     if (experiments.length > 0 && !expAId) {
       setExpAId(experiments[0].id);
-      if (experiments.length > 1) setExpBId(experiments[1].id);
-      else setExpBId(experiments[0].id);
+      setExpBId(experiments[1]?.id || experiments[0].id);
     }
   }, [experiments, expAId]);
 
-  const uniqueDatasetIds = useMemo(() => {
-    return Array.from(new Set(experiments.map(e => e.datasetId).filter(Boolean)));
-  }, [experiments]);
+  const uniqueDatasetIds = useMemo(() => Array.from(new Set(experiments.map((experiment) => experiment.datasetId).filter(Boolean))), [experiments]);
 
   const filteredExperiments = useMemo(() => {
-    if (selectedDatasetId === 'all') return experiments;
-    return experiments.filter(e => e.datasetId === selectedDatasetId);
+    if (selectedDatasetId === 'all') {
+      return experiments;
+    }
+    return experiments.filter((experiment) => experiment.datasetId === selectedDatasetId);
   }, [experiments, selectedDatasetId]);
 
-  const handleUpdateScore = (expId, metric, value) => {
-    const updated = experiments.map(e => {
-      if (e.id === expId) {
-        return {
-          ...e,
-          scores: { ...(e.scores || {}), [metric]: value }
-        };
-      }
-      return e;
-    });
-    onUpdateExps(updated);
-    writeLocalStorageJSON(EXPERIMENTS_KEY, updated);
-  };
-
-  const expA = useMemo(() => experiments.find(e => e.id === expAId), [experiments, expAId]);
-  const expB = useMemo(() => experiments.find(e => e.id === expBId), [experiments, expBId]);
+  const expA = useMemo(() => experiments.find((experiment) => experiment.id === expAId), [experiments, expAId]);
+  const expB = useMemo(() => experiments.find((experiment) => experiment.id === expBId), [experiments, expBId]);
 
   const winnerInfo = useMemo(() => {
-    if (!expA || !expB || expA.id === expB.id) return null;
+    if (!expA || !expB || expA.id === expB.id) {
+      return null;
+    }
+
     const scoresA = Object.values(expA.scores || {});
     const scoresB = Object.values(expB.scores || {});
-    
-    if (scoresA.length === 0 || scoresB.length === 0) return null;
-    
-    const avgA = scoresA.reduce((a, b) => a + b, 0) / scoresA.length;
-    const avgB = scoresB.reduce((a, b) => a + b, 0) / scoresB.length;
-    
-    if (avgA === avgB) return 'tie';
+    if (scoresA.length === 0 || scoresB.length === 0) {
+      return null;
+    }
+
+    const avgA = scoresA.reduce((sum, value) => sum + value, 0) / scoresA.length;
+    const avgB = scoresB.reduce((sum, value) => sum + value, 0) / scoresB.length;
+    if (avgA === avgB) {
+      return 'tie';
+    }
     return avgA > avgB ? 'a' : 'b';
   }, [expA, expB]);
 
@@ -369,83 +342,56 @@ function ComparisonView({ experiments, datasets, onUpdateExps }) {
   }
 
   return (
-    <div className="p-8 h-full overflow-y-auto animate-in fade-in duration-300 flex flex-col">
-      <div className="flex justify-between items-center mb-8 shrink-0">
+    <div className="flex h-full flex-col overflow-y-auto p-8 animate-in fade-in duration-300">
+      <div className="mb-8 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-text-muted uppercase tracking-wider">Filter by Dataset:</span>
-          <select 
-            value={selectedDatasetId}
-            onChange={e => setSelectedDatasetId(e.target.value)}
-            className="bg-panel border border-border rounded-md px-3 py-1.5 text-sm focus:outline-none focus:border-primary transition-colors cursor-pointer text-text-main"
-          >
+          <span className="text-xs font-medium uppercase tracking-wider text-text-muted">Filter by Dataset:</span>
+          <select value={selectedDatasetId} onChange={(e) => setSelectedDatasetId(e.target.value)} className="cursor-pointer rounded-md border border-border bg-panel px-3 py-1.5 text-sm text-text-main transition-colors focus:border-primary focus:outline-none">
             <option value="all">All Experiments</option>
-            {uniqueDatasetIds.map(id => {
-              const ds = datasets.find(d => d.id === id);
-              return <option key={id} value={id}>{ds ? ds.name : `Dataset ${id}`}</option>;
+            {uniqueDatasetIds.map((id) => {
+              const dataset = datasets.find((item) => item.id === id);
+              return <option key={id} value={id}>{dataset ? dataset.name : `Dataset ${id}`}</option>;
             })}
           </select>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-6 mb-8 shrink-0">
-        <div className="space-y-2">
-          <label className="text-[10px] font-bold text-text-muted uppercase tracking-[0.2em] ml-1">Experiment A</label>
-          <select 
-            value={expAId}
-            onChange={e => setExpAId(e.target.value)}
-            className="w-full bg-panel border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all appearance-none cursor-pointer text-text-main"
-          >
-            {filteredExperiments.map(e => (
-              <option key={e.id} value={e.id}>
-                {e.promptName || 'Unknown Prompt'} · {e.version} · {e.provider} · {e.modelId} · {timeAgo(e.timestamp)}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="space-y-2">
-          <label className="text-[10px] font-bold text-text-muted uppercase tracking-[0.2em] ml-1">Experiment B</label>
-          <select 
-            value={expBId}
-            onChange={e => setExpBId(e.target.value)}
-            className="w-full bg-panel border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all appearance-none cursor-pointer text-text-main"
-          >
-            {filteredExperiments.map(e => (
-              <option key={e.id} value={e.id}>
-                {e.promptName || 'Unknown Prompt'} · {e.version} · {e.provider} · {e.modelId} · {timeAgo(e.timestamp)}
-              </option>
-            ))}
-          </select>
-        </div>
+      <div className="mb-8 grid grid-cols-2 gap-6 shrink-0">
+        <Selector label="Experiment A" value={expAId} onChange={setExpAId} experiments={filteredExperiments} />
+        <Selector label="Experiment B" value={expBId} onChange={setExpBId} experiments={filteredExperiments} />
       </div>
 
-      <div className="flex-1 grid grid-cols-2 gap-6 items-stretch">
-        <EvalPanel 
-          exp={expA} 
-          isWinner={winnerInfo === 'a'} 
-          isTie={winnerInfo === 'tie'}
-          onUpdateScore={(metric, val) => handleUpdateScore(expAId, metric, val)}
-        />
-        <EvalPanel 
-          exp={expB} 
-          isWinner={winnerInfo === 'b'} 
-          isTie={winnerInfo === 'tie'}
-          onUpdateScore={(metric, val) => handleUpdateScore(expBId, metric, val)}
-        />
+      <div className="grid flex-1 grid-cols-2 gap-6">
+        <EvalPanel exp={expA} isWinner={winnerInfo === 'a'} isTie={winnerInfo === 'tie'} onUpdateScore={(metric, value) => onUpdateExperiment({ ...expA, scores: { ...(expA.scores || {}), [metric]: value } })} />
+        <EvalPanel exp={expB} isWinner={winnerInfo === 'b'} isTie={winnerInfo === 'tie'} onUpdateScore={(metric, value) => onUpdateExperiment({ ...expB, scores: { ...(expB.scores || {}), [metric]: value } })} />
       </div>
     </div>
   );
 }
 
-function BatchEvalView({ experiments, datasets, models, onUpdateExperiment, onUpdateExps }) {
-  const [viewMode, setViewMode] = useState('existing'); // 'existing' | 'new'
+function Selector({ label, value, onChange, experiments }) {
+  return (
+    <div className="space-y-2">
+      <label className="ml-1 text-[10px] font-bold uppercase tracking-[0.2em] text-text-muted">{label}</label>
+      <select value={value} onChange={(e) => onChange(e.target.value)} className="w-full cursor-pointer appearance-none rounded-lg border border-border bg-panel px-4 py-3 text-sm text-text-main transition-all focus:outline-none focus:ring-1 focus:ring-primary/50">
+        {experiments.map((experiment) => (
+          <option key={experiment.id} value={experiment.id}>
+            {experiment.promptName || 'Unknown Prompt'} · {experiment.promptVersion} · {experiment.provider} · {experiment.modelName || experiment.model}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDetail, onExperimentsAdded, onUpdateExperiment }) {
+  const [viewMode, setViewMode] = useState('existing');
   const [selectedDatasetId, setSelectedDatasetId] = useState('all');
   const [selectedVersion, setSelectedVersion] = useState('all');
   const [expandedRows, setExpandedRows] = useState(new Set());
   const [isAIScoringOpen, setIsAIScoringOpen] = useState(false);
-  const [scoringProgress, setScoringProgress] = useState(null); // { current, total }
+  const [scoringProgress, setScoringProgress] = useState(null);
   const [successBanner, setSuccessBanner] = useState('');
-
-  // New Batch State
   const [newBatchDatasetId, setNewBatchDatasetId] = useState('');
   const [newBatchPromptId, setNewBatchPromptId] = useState('');
   const [newBatchVersionId, setNewBatchVersionId] = useState('');
@@ -453,317 +399,185 @@ function BatchEvalView({ experiments, datasets, models, onUpdateExperiment, onUp
   const [varMappings, setVarMappings] = useState({});
   const [rowLimit, setRowLimit] = useState('all');
   const [isRunningBatch, setIsRunningBatch] = useState(false);
-  const [batchProgress, setBatchProgress] = useState(null); // { current, total }
-  const [batchResult, setBatchResult] = useState(null); // { successCount, failCount }
-  const [progressMessage, setProgressMessage] = useState(null);
-  const cancelledRef = useRef(false);
-
+  const [batchResult, setBatchResult] = useState(null);
   const [promptVersions, setPromptVersions] = useState([]);
-  const [prompts, setPrompts] = useState([]);
 
   useEffect(() => {
-    const promptsData = readLocalStorageJSON('pe_prompts', []);
-    const versionsData = readLocalStorageJSON('pe_versions', []);
-    setPrompts(Array.isArray(promptsData) ? promptsData : []);
-    setPromptVersions(Array.isArray(versionsData) ? versionsData : []);
-  }, []);
-
-  useEffect(() => {
-    if (successBanner) {
-      const timer = setTimeout(() => setSuccessBanner(''), 5000);
-      return () => clearTimeout(timer);
+    if (!newBatchPromptId) {
+      setPromptVersions([]);
+      return;
     }
-  }, [successBanner]);
 
-  // Auto-map variables when dataset or version changes
+    listPromptVersions(newBatchPromptId).then(setPromptVersions).catch(() => setPromptVersions([]));
+  }, [newBatchPromptId]);
+
   useEffect(() => {
-    if (!newBatchDatasetId || !newBatchVersionId) return;
-    const dataset = datasets.find(d => d.id === newBatchDatasetId);
-    const version = promptVersions.find(v => String(v.version) === String(newBatchVersionId) && v.promptId === newBatchPromptId);
-    if (!dataset || !version) return;
+    if (!newBatchDatasetId || !newBatchVersionId) {
+      return;
+    }
 
-    const varNames = Array.from(new Set(
-      Array.from((version.userTemplate || version.userPrompt || '').matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g) || []).map(match => match[1])
-    ));
+    const dataset = datasets.find((item) => item.id === newBatchDatasetId);
+    const version = promptVersions.find((item) => String(item.version) === String(newBatchVersionId));
+    if (!dataset || !version) {
+      return;
+    }
 
-    const newMappings = {};
-    varNames.forEach(v => {
-      if (dataset.columns.includes(v)) newMappings[v] = v;
-      else newMappings[v] = '';
+    const mappings = {};
+    const variableNames = Array.from(new Set(Array.from((version.userTemplate || '').matchAll(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g)).map((match) => match[1])));
+    variableNames.forEach((name) => {
+      mappings[name] = dataset.columns.includes(name) ? name : '';
     });
-    setVarMappings(newMappings);
-  }, [newBatchDatasetId, newBatchVersionId, newBatchPromptId, datasets, promptVersions]);
+    setVarMappings(mappings);
+  }, [newBatchDatasetId, newBatchVersionId, datasets, promptVersions]);
+
+  useEffect(() => {
+    if (!successBanner) {
+      return;
+    }
+    const timer = setTimeout(() => setSuccessBanner(''), 5000);
+    return () => clearTimeout(timer);
+  }, [successBanner]);
 
   const datasetExps = useMemo(() => {
     let filtered = experiments;
-    if (selectedDatasetId !== 'all') filtered = filtered.filter(e => e.datasetId === selectedDatasetId);
-    if (selectedVersion !== 'all') filtered = filtered.filter(e => e.version === selectedVersion);
+    if (selectedDatasetId !== 'all') {
+      filtered = filtered.filter((experiment) => experiment.datasetId === selectedDatasetId);
+    }
+    if (selectedVersion !== 'all') {
+      filtered = filtered.filter((experiment) => experiment.promptVersion === selectedVersion);
+    }
     return filtered;
   }, [experiments, selectedDatasetId, selectedVersion]);
 
   const uniqueVersions = useMemo(() => {
-    const exps = selectedDatasetId === 'all' ? experiments : experiments.filter(e => e.datasetId === selectedDatasetId);
-    return Array.from(new Set(exps.map(e => e.version).filter(Boolean)));
+    const scoped = selectedDatasetId === 'all' ? experiments : experiments.filter((experiment) => experiment.datasetId === selectedDatasetId);
+    return Array.from(new Set(scoped.map((experiment) => experiment.promptVersion).filter(Boolean)));
   }, [experiments, selectedDatasetId]);
 
   const summary = useMemo(() => {
-    const scoredExps = datasetExps.filter(e => e.scores && Object.keys(e.scores).length > 0);
-    if (scoredExps.length === 0) return null;
+    const scoredExperiments = datasetExps.filter((experiment) => experiment.scores && Object.keys(experiment.scores).length > 0);
+    if (scoredExperiments.length === 0) {
+      return null;
+    }
 
     const totals = { Relevance: 0, Correctness: 0, Toxicity: 0, Fluency: 0, Overall: 0 };
-    scoredExps.forEach(e => {
+    scoredExperiments.forEach((experiment) => {
       let rowTotal = 0;
       let count = 0;
-      METRICS.forEach(m => {
-        if (e.scores[m] !== undefined) {
-          totals[m] += e.scores[m];
-          rowTotal += e.scores[m];
-          count++;
+      METRICS.forEach((metric) => {
+        if (experiment.scores[metric] !== undefined) {
+          totals[metric] += experiment.scores[metric];
+          rowTotal += experiment.scores[metric];
+          count += 1;
         }
       });
-      if (count > 0) totals.Overall += (rowTotal / count);
+      if (count > 0) {
+        totals.Overall += rowTotal / count;
+      }
     });
 
     return {
-      Relevance: (totals.Relevance / (scoredExps.filter(e => e.scores.Relevance !== undefined).length || 1)).toFixed(1),
-      Correctness: (totals.Correctness / (scoredExps.filter(e => e.scores.Correctness !== undefined).length || 1)).toFixed(1),
-      Toxicity: (totals.Toxicity / (scoredExps.filter(e => e.scores.Toxicity !== undefined).length || 1)).toFixed(1),
-      Fluency: (totals.Fluency / (scoredExps.filter(e => e.scores.Fluency !== undefined).length || 1)).toFixed(1),
-      Overall: (totals.Overall / scoredExps.length).toFixed(1),
-      scoredCount: scoredExps.length,
+      Relevance: (totals.Relevance / (scoredExperiments.filter((experiment) => experiment.scores.Relevance !== undefined).length || 1)).toFixed(1),
+      Correctness: (totals.Correctness / (scoredExperiments.filter((experiment) => experiment.scores.Correctness !== undefined).length || 1)).toFixed(1),
+      Toxicity: (totals.Toxicity / (scoredExperiments.filter((experiment) => experiment.scores.Toxicity !== undefined).length || 1)).toFixed(1),
+      Fluency: (totals.Fluency / (scoredExperiments.filter((experiment) => experiment.scores.Fluency !== undefined).length || 1)).toFixed(1),
+      Overall: (totals.Overall / scoredExperiments.length).toFixed(1),
+      scoredCount: scoredExperiments.length,
       totalCount: datasetExps.length
     };
   }, [datasetExps]);
 
   const toggleRow = (id) => {
     const next = new Set(expandedRows);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
     setExpandedRows(next);
   };
 
   const handleRunNewBatch = async () => {
-    const selectedPromptVersion = promptVersions.find(v => String(v.version) === String(newBatchVersionId) && v.promptId === newBatchPromptId);
-    const selectedModel = models.find(m => m.id === newBatchModelId);
-    const variableMapping = varMappings;
+    try {
+      setIsRunningBatch(true);
+      setBatchResult(null);
+      const result = await runBatchEvaluation({
+        promptId: newBatchPromptId,
+        versionId: newBatchVersionId,
+        datasetId: newBatchDatasetId,
+        modelId: newBatchModelId,
+        rowLimit,
+        variableMapping: varMappings,
+        delayMs: 300
+      });
 
-    const datasetsFromStorage = (() => {
-      try {
-        const raw = localStorage.getItem('pe_datasets');
-        if (!raw) return [];
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return [];
-      }
-    })();
-
-    const selectedDataset = datasetsFromStorage.find(d => d.id === newBatchDatasetId);
-
-    if (!selectedPromptVersion || !selectedModel) return;
-    if (!selectedDataset) {
-      console.error('Dataset not found for id:', newBatchDatasetId);
-      return;
+      onExperimentsAdded(result.experiments || []);
+      setBatchResult({ successCount: result.successCount, failCount: result.failCount });
+      setSuccessBanner(`Batch complete — ${result.successCount} experiments logged (${result.failCount} failed)`);
+      setSelectedDatasetId(newBatchDatasetId);
+      const selectedVersionItem = promptVersions.find((version) => version.id === newBatchVersionId);
+      setSelectedVersion(selectedVersionItem?.promptVersion || selectedVersionItem?.versionDisplay || `v${selectedVersionItem?.version}`);
+      setViewMode('existing');
+    } catch {
+      setSuccessBanner('');
+    } finally {
+      setIsRunningBatch(false);
     }
-
-    const rows = Array.isArray(selectedDataset.rows) ? selectedDataset.rows : [];
-    if (rows.length === 0) {
-      console.error('Dataset has no rows:', selectedDataset);
-      return;
-    }
-
-    const limit = (rowLimit === 'all' || !rowLimit)
-      ? rows.length
-      : parseInt(rowLimit, 10) || rows.length;
-    const rowsToProcess = rows.slice(0, limit);
-
-    console.log('Selected dataset:', selectedDataset);
-    console.log('Rows to process:', rowsToProcess);
-    console.log('Selected prompt version:', selectedPromptVersion);
-    console.log('Selected model:', selectedModel);
-    console.log('Variable mapping:', variableMapping);
-
-    const interpolateTemplate = (userTemplate, row, mapping) => {
-      return userTemplate.replace(
-        /\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g,
-        (match, varName) => {
-          const colName = mapping[varName];
-          return colName ? (row[colName] ?? match) : match;
-        }
-      );
-    };
-
-    setIsRunningBatch(true);
-    setBatchResult(null);
-    cancelledRef.current = false;
-    setBatchProgress({ current: 0, total: rowsToProcess.length });
-
-    let successCount = 0;
-    let failCount = 0;
-    const newExperiments = [];
-
-    for (let i = 0; i < rowsToProcess.length; i++) {
-      const row = rowsToProcess[i];
-      setProgressMessage(`Running row ${i + 1} of ${rowsToProcess.length}...`);
-      setBatchProgress({ current: i + 1, total: rowsToProcess.length });
-
-      try {
-        const interpolated = interpolateTemplate(selectedPromptVersion.userTemplate || selectedPromptVersion.userPrompt || '', row, variableMapping);
-        const result = await callModel(selectedModel, selectedPromptVersion.systemPrompt || '', interpolated);
-
-        const selectedPrompt = prompts.find(p => p.id === newBatchPromptId);
-        const versionLabel = `v${selectedPromptVersion.version}`;
-        const experiment = {
-          id: crypto.randomUUID(),
-          promptId: newBatchPromptId,
-          promptName: selectedPrompt?.name || 'Unknown Prompt',
-          promptVersion: versionLabel,
-          version: versionLabel,
-          model: selectedModel.name || selectedModel.modelId,
-          modelId: selectedModel.modelId,
-          provider: selectedModel.provider,
-          systemPrompt: selectedPromptVersion.systemPrompt || '',
-          userTemplate: selectedPromptVersion.userTemplate || selectedPromptVersion.userPrompt || '',
-          variableValues: row,
-          interpolatedPrompt: interpolated,
-          output: result.output,
-          latencyMs: result.latency,
-          inputTokens: result.inputTokens,
-          outputTokens: result.outputTokens,
-          totalTokens: result.totalTokens,
-          costEstimate: result.costEstimate,
-          status: 'success',
-          datasetId: selectedDataset.id,
-          datasetRowIndex: i,
-          timestamp: new Date().toISOString(),
-          tags: [],
-          score: null,
-          notes: '',
-          scores: {},
-          reasoning: {}
-        };
-
-        const existing = (() => {
-          try {
-            return JSON.parse(localStorage.getItem('pe_experiments') || '[]');
-          } catch {
-            return [];
-          }
-        })();
-        localStorage.setItem('pe_experiments', JSON.stringify([...existing, experiment]));
-
-        newExperiments.push(experiment);
-        successCount++;
-      } catch (err) {
-        console.error(`Row ${i + 1} failed:`, err);
-        failCount++;
-      }
-
-      await new Promise(r => setTimeout(r, 300));
-      if (cancelledRef.current) break;
-    }
-
-    const allExps = readLocalStorageJSON(EXPERIMENTS_KEY, []);
-    onUpdateExps(allExps);
-
-    setProgressMessage(null);
-    setBatchResult({ successCount, failCount });
-    setSuccessBanner(`Batch complete — ${successCount} experiments logged (${failCount} failed)`);
-    setIsRunningBatch(false);
-    setBatchProgress(null);
-    setSelectedDatasetId(newBatchDatasetId);
-    setSelectedVersion(`v${newBatchVersionId}`);
-    setViewMode('existing');
   };
 
-  const handleRunAIScoring = async (config) => {
+  const handleRunAIScoring = async ({ metrics, expectedOutputCol }) => {
     setIsAIScoringOpen(false);
-    const unscored = datasetExps.filter(e => {
-      const hasScores = e.scores && config.metrics.every(m => e.scores[m] !== undefined);
-      return !hasScores;
-    });
 
-    if (unscored.length === 0) return;
-    
-    setScoringProgress({ current: 0, total: unscored.length });
-    
-    const scoringModel = models.find(m => m.provider === 'Anthropic' && m.apiKey) || models.find(m => m.apiKey);
-    if (!scoringModel) {
-      alert("No model with API key found for scoring.");
-      setScoringProgress(null);
+    const unscored = datasetExps.filter((experiment) => !metrics.every((metric) => experiment.scores?.[metric] !== undefined));
+    if (unscored.length === 0) {
       return;
     }
 
-    for (let i = 0; i < unscored.length; i++) {
-      const exp = unscored[i];
-      setScoringProgress({ current: i + 1, total: unscored.length });
+    setScoringProgress({ current: 0, total: unscored.length });
 
-      const dataset = datasets.find(d => d.id === exp.datasetId);
-      let expectedOutput = "";
-      if (config.expectedOutputCol && dataset) {
-        const dsRow = dataset.rows.find(r => 
-          Object.keys(exp.variableValues || {}).every(key => String(r[key]) === String(exp.variableValues[key]))
-        );
-        if (dsRow) expectedOutput = dsRow[config.expectedOutputCol];
+    for (let index = 0; index < unscored.length; index += 1) {
+      const experiment = unscored[index];
+      setScoringProgress({ current: index + 1, total: unscored.length });
+
+      let expectedOutput = undefined;
+      if (expectedOutputCol && experiment.datasetId) {
+        const dataset = await fetchDatasetDetail(experiment.datasetId);
+        const row = dataset?.rows?.[experiment.datasetRowIndex];
+        expectedOutput = row?.[expectedOutputCol];
       }
 
-      for (const metric of config.metrics) {
-        const prompt = `You are an evaluation assistant. Score the following AI output on a scale of 0-100.
+      try {
+        const result = await scoreEvaluation({
+          experimentId: experiment.id,
+          metrics,
+          expectedOutput
+        });
 
-Metric: ${metric}
-User input: ${exp.interpolatedPrompt || exp.userTemplate}
-AI output: ${exp.output}
-${expectedOutput ? `Expected output: ${expectedOutput}` : ''}
-
-Respond with only a JSON object: { "score": <number>, "reasoning": "<one sentence>" }`;
-
-        try {
-          const result = await callModel(scoringModel, "You are a helpful evaluation assistant.", prompt);
-          const parsed = JSON.parse((result.output || '').match(/\{.*\}/s)?.[0] || '{}');
-          if (typeof parsed.score === 'number') {
-            const updated = {
-              ...exp,
-              scores: { ...(exp.scores || {}), [metric]: parsed.score },
-              reasoning: { ...(exp.reasoning || {}), [metric]: parsed.reasoning || '' }
-            };
-            onUpdateExperiment(updated);
-          }
-        } catch (err) {
-          console.error("AI Scoring failed for row", i, err);
+        if (result.updatedExperiment) {
+          await onUpdateExperiment(result.updatedExperiment);
         }
+      } catch {
+        // Keep the run moving if one item fails to score.
       }
     }
+
     setScoringProgress(null);
   };
 
-  if (experiments.length === 0 && viewMode === 'existing') return <EvalEmptyState />;
+  if (experiments.length === 0 && viewMode === 'existing') {
+    return <EvalEmptyState />;
+  }
 
   return (
-    <div className="h-full flex flex-col p-8 overflow-hidden animate-in fade-in duration-300">
-      <div className="flex gap-1 bg-panel border border-border p-1 rounded-lg w-fit mb-6 shrink-0">
-        <button 
-          onClick={() => setViewMode('existing')}
-          className={cn(
-            "px-4 py-1.5 rounded-md text-xs font-bold transition-all",
-            viewMode === 'existing' ? "bg-background text-primary shadow-sm" : "text-text-muted hover:text-text-main"
-          )}
-        >
-          Existing Runs
-        </button>
-        <button 
-          onClick={() => setViewMode('new')}
-          className={cn(
-            "px-4 py-1.5 rounded-md text-xs font-bold transition-all",
-            viewMode === 'new' ? "bg-background text-primary shadow-sm" : "text-text-muted hover:text-text-main"
-          )}
-        >
-          Run New Batch
-        </button>
+    <div className="flex h-full flex-col overflow-hidden p-8 animate-in fade-in duration-300">
+      <div className="mb-6 flex w-fit gap-1 rounded-lg border border-border bg-panel p-1 shrink-0">
+        <MiniTab active={viewMode === 'existing'} onClick={() => setViewMode('existing')}>Existing Runs</MiniTab>
+        <MiniTab active={viewMode === 'new'} onClick={() => setViewMode('new')}>Run New Batch</MiniTab>
       </div>
 
       {successBanner && (
-        <div className="shrink-0 mb-6 bg-primary/10 border border-primary/30 rounded-lg p-3 flex items-center justify-between animate-in slide-in-from-top-2">
-          <div className="flex items-center gap-2 text-primary font-bold text-sm">
+        <div className="mb-6 flex items-center justify-between rounded-lg border border-primary/30 bg-primary/10 p-3 shrink-0 animate-in slide-in-from-top-2">
+          <div className="flex items-center gap-2 text-sm font-bold text-primary">
             <CheckCircle2 size={16} /> {successBanner}
           </div>
           <button onClick={() => setSuccessBanner('')}><X size={16} className="text-primary opacity-50 hover:opacity-100" /></button>
@@ -771,109 +585,44 @@ Respond with only a JSON object: { "score": <number>, "reasoning": "<one sentenc
       )}
 
       {viewMode === 'new' ? (
-        <div className="flex-1 overflow-y-auto space-y-8 pr-2 scrollbar-thin">
+        <div className="flex-1 space-y-8 overflow-y-auto pr-2">
           <div className="grid grid-cols-2 gap-8">
             <div className="space-y-6">
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Select Dataset</label>
-                <select 
-                  value={newBatchDatasetId}
-                  onChange={e => setNewBatchDatasetId(e.target.value)}
-                  className="w-full bg-panel border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-primary text-text-main"
-                >
-                  <option value="">Select a dataset...</option>
-                  {datasets.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                </select>
-                {newBatchDatasetId && (
-                  <div className="text-[10px] text-text-muted mt-2 font-mono">
-                    {datasets.find(d => d.id === newBatchDatasetId)?.name} — {datasets.find(d => d.id === newBatchDatasetId)?.rows.length} rows · columns: {datasets.find(d => d.id === newBatchDatasetId)?.columns.join(', ')}
-                  </div>
-                )}
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Prompt</label>
-                <select
-                  value={newBatchPromptId}
-                  onChange={e => {
-                    setNewBatchPromptId(e.target.value);
-                    setNewBatchVersionId('');
-                  }}
-                  className="w-full bg-panel border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-primary text-text-main"
-                >
-                  <option value="">Select a prompt...</option>
-                  {prompts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Prompt Version</label>
-                <select 
-                  value={newBatchVersionId}
-                  onChange={e => setNewBatchVersionId(e.target.value)}
-                  className="w-full bg-panel border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-primary text-text-main"
-                >
-                  <option value="">Select a version...</option>
-                  {promptVersions
-                    .filter(v => v.promptId === newBatchPromptId)
-                    .sort((a, b) => Number(b.version || 0) - Number(a.version || 0))
-                    .map(v => <option key={`${v.promptId}-${v.version}`} value={v.version}>v{v.version} — {v.commitMessage || 'Saved version'}</option>)}
-                </select>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Model</label>
-                <select 
-                  value={newBatchModelId}
-                  onChange={e => setNewBatchModelId(e.target.value)}
-                  className="w-full bg-panel border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-primary text-text-main"
-                >
-                  <option value="">Select a model...</option>
-                  {models.filter(m => m.apiKey).map(m => <option key={m.id} value={m.id}>{m.provider} — {m.name}</option>)}
-                </select>
-              </div>
+              <SelectField label="Select Dataset" value={newBatchDatasetId} onChange={setNewBatchDatasetId} options={datasets.map((dataset) => ({ value: dataset.id, label: dataset.name }))} placeholder="Select a dataset..." />
+              <SelectField label="Prompt" value={newBatchPromptId} onChange={(value) => { setNewBatchPromptId(value); setNewBatchVersionId(''); }} options={prompts.map((prompt) => ({ value: prompt.id, label: prompt.name }))} placeholder="Select a prompt..." />
+              <SelectField label="Prompt Version" value={newBatchVersionId} onChange={setNewBatchVersionId} options={promptVersions.map((version) => ({ value: version.id, label: `${version.versionDisplay} — ${version.commitMessage || 'Saved version'}` }))} placeholder="Select a version..." />
+              <SelectField label="Model" value={newBatchModelId} onChange={setNewBatchModelId} options={models.filter((model) => model.status === 'active').map((model) => ({ value: model.id, label: `${model.provider} — ${model.name}` }))} placeholder="Select a model..." />
             </div>
 
             <div className="space-y-6">
               <div className="space-y-4">
-                <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Variable Mapping</label>
+                <label className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Variable Mapping</label>
                 {Object.keys(varMappings).length > 0 ? (
-                  <div className="space-y-3 bg-panel/30 border border-border rounded-xl p-4">
-                    {Object.keys(varMappings).map(vName => (
-                      <div key={vName} className="flex items-center justify-between gap-4">
-                        <span className="text-xs font-mono text-primary">{"{"}{vName}{"}"}</span>
-                        <select 
-                          value={varMappings[vName]}
-                          onChange={e => setVarMappings({...varMappings, [vName]: e.target.value})}
-                          className="flex-1 max-w-[200px] bg-background border border-border rounded px-3 py-1.5 text-xs focus:outline-none focus:border-primary text-text-main"
-                        >
+                  <div className="space-y-3 rounded-xl border border-border bg-panel/30 p-4">
+                    {Object.keys(varMappings).map((variableName) => (
+                      <div key={variableName} className="flex items-center justify-between gap-4">
+                        <span className="text-xs font-mono text-primary">{'{' + variableName + '}'}</span>
+                        <select value={varMappings[variableName]} onChange={(e) => setVarMappings({ ...varMappings, [variableName]: e.target.value })} className="max-w-[200px] flex-1 rounded border border-border bg-background px-3 py-1.5 text-xs text-text-main focus:border-primary focus:outline-none">
                           <option value="">Unmapped</option>
-                          {datasets.find(d => d.id === newBatchDatasetId)?.columns.map(col => (
-                            <option key={col} value={col}>{col}</option>
+                          {datasets.find((dataset) => dataset.id === newBatchDatasetId)?.columns.map((column) => (
+                            <option key={column} value={column}>{column}</option>
                           ))}
                         </select>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="text-xs text-text-muted italic p-4 bg-panel/30 border border-dashed border-border rounded-xl">
+                  <div className="rounded-xl border border-dashed border-border bg-panel/30 p-4 text-xs italic text-text-muted">
                     Select a version to map variables
                   </div>
                 )}
               </div>
 
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest">Row Limit</label>
+                <label className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Row Limit</label>
                 <div className="flex gap-2">
-                  {['all', '5', '10'].map(limit => (
-                    <button 
-                      key={limit}
-                      onClick={() => setRowLimit(limit)}
-                      className={cn(
-                        "flex-1 py-2 rounded-lg border text-xs font-bold transition-all",
-                        rowLimit === limit ? "bg-primary/10 border-primary text-primary" : "bg-panel border-border text-text-muted hover:border-primary/30"
-                      )}
-                    >
+                  {['all', '5', '10'].map((limit) => (
+                    <button key={limit} onClick={() => setRowLimit(limit)} className={cn('flex-1 rounded-lg border py-2 text-xs font-bold transition-all', rowLimit === limit ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-panel text-text-muted hover:border-primary/30')}>
                       {limit === 'all' ? 'All Rows' : `First ${limit}`}
                     </button>
                   ))}
@@ -881,28 +630,10 @@ Respond with only a JSON object: { "score": <number>, "reasoning": "<one sentenc
               </div>
 
               <div className="pt-4">
-                <button 
-                  onClick={handleRunNewBatch}
-                  disabled={!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId || isRunningBatch}
-                  className="w-full py-4 bg-primary text-panel font-black uppercase tracking-[0.2em] rounded-xl hover:bg-primary/90 transition-all shadow-lg shadow-primary/20 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {isRunningBatch ? <div className="w-4 h-4 border-2 border-panel border-t-transparent rounded-full animate-spin" /> : <Play size={18} fill="currentColor" />}
-                  {isRunningBatch ? `Running Row ${batchProgress?.current} of ${batchProgress?.total}...` : 'Run Batch'}
+                <button onClick={handleRunNewBatch} disabled={!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId || isRunningBatch} className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-4 font-black uppercase tracking-[0.2em] text-panel shadow-lg shadow-primary/20 transition-all hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-30">
+                  {isRunningBatch ? <div className="h-4 w-4 rounded-full border-2 border-panel border-t-transparent animate-spin" /> : <Play size={18} fill="currentColor" />}
+                  {isRunningBatch ? 'Running...' : 'Run Batch'}
                 </button>
-                {isRunningBatch && (
-                  <button
-                    onClick={() => {
-                      cancelledRef.current = true;
-                      setIsRunningBatch(false);
-                    }}
-                    className="w-full mt-2 text-xs font-bold text-red-400 hover:underline"
-                  >
-                    Cancel Execution
-                  </button>
-                )}
-                {progressMessage && (
-                  <div className="mt-2 text-xs text-text-muted">{progressMessage}</div>
-                )}
                 {batchResult && (
                   <div className="mt-2 text-xs text-text-muted">
                     Completed: {batchResult.successCount} success, {batchResult.failCount} failed
@@ -914,62 +645,37 @@ Respond with only a JSON object: { "score": <number>, "reasoning": "<one sentenc
         </div>
       ) : (
         <>
-          <div className="shrink-0 space-y-6 mb-6">
-            <div className="flex justify-between items-end">
+          <div className="mb-6 space-y-6 shrink-0">
+            <div className="flex items-end justify-between">
               <div className="flex gap-4">
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest ml-1">Dataset</label>
-                  <select 
-                    value={selectedDatasetId}
-                    onChange={e => setSelectedDatasetId(e.target.value)}
-                    className="bg-panel border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-primary text-text-main min-w-[200px]"
-                  >
-                    <option value="all">All Datasets</option>
-                    {datasets.filter(d => experiments.some(e => e.datasetId === d.id)).map(d => (
-                      <option key={d.id} value={d.id}>{d.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-text-muted uppercase tracking-widest ml-1">Version</label>
-                  <select 
-                    value={selectedVersion}
-                    onChange={e => setSelectedVersion(e.target.value)}
-                    className="bg-panel border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:border-primary text-text-main min-w-[120px]"
-                  >
-                    <option value="all">All Versions</option>
-                    {uniqueVersions.map(v => <option key={v} value={v}>{v}</option>)}
-                  </select>
-                </div>
+                <FilterField label="Dataset" value={selectedDatasetId} onChange={setSelectedDatasetId} options={[{ value: 'all', label: 'All Datasets' }, ...datasets.filter((dataset) => experiments.some((experiment) => experiment.datasetId === dataset.id)).map((dataset) => ({ value: dataset.id, label: dataset.name }))]} />
+                <FilterField label="Version" value={selectedVersion} onChange={setSelectedVersion} options={[{ value: 'all', label: 'All Versions' }, ...uniqueVersions.map((version) => ({ value: version, label: version }))]} />
               </div>
-              <button 
-                onClick={() => setIsAIScoringOpen(true)}
-                className="px-4 py-2 bg-primary text-panel font-bold rounded-lg hover:bg-primary/90 transition-all flex items-center gap-2 text-sm shadow-lg shadow-primary/10"
-              >
+              <button onClick={() => setIsAIScoringOpen(true)} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-bold text-panel shadow-lg shadow-primary/10 transition-all hover:bg-primary/90">
                 <Zap size={16} fill="currentColor" /> Score All with AI
               </button>
             </div>
 
             {summary && (
-              <div className="bg-panel/50 border border-border rounded-xl p-4 flex items-center justify-between shadow-sm">
+              <div className="flex items-center justify-between rounded-xl border border-border bg-panel/50 p-4 shadow-sm">
                 <div className="flex gap-8">
-                  {METRICS.map(m => (
-                    <div key={m} className="flex flex-col gap-1">
-                      <span className="text-[10px] font-bold text-text-muted uppercase tracking-tighter">{m}</span>
-                      <span className={cn("text-lg font-bold font-mono", parseFloat(summary[m]) > 80 ? "text-primary" : "text-text-main")}>
-                        {isNaN(summary[m]) ? '--' : `${summary[m]}%`}
+                  {METRICS.map((metric) => (
+                    <div key={metric} className="flex flex-col gap-1">
+                      <span className="text-[10px] font-bold uppercase tracking-tighter text-text-muted">{metric}</span>
+                      <span className={cn('font-mono text-lg font-bold', parseFloat(summary[metric]) > 80 ? 'text-primary' : 'text-text-main')}>
+                        {isNaN(summary[metric]) ? '--' : `${summary[metric]}%`}
                       </span>
                     </div>
                   ))}
-                  <div className="w-[1px] bg-border mx-2"></div>
+                  <div className="mx-2 w-[1px] bg-border" />
                   <div className="flex flex-col gap-1">
-                    <span className="text-[10px] font-bold text-primary uppercase tracking-tighter">Overall</span>
-                    <span className="text-lg font-bold font-mono text-primary">{summary.Overall}%</span>
+                    <span className="text-[10px] font-bold uppercase tracking-tighter text-primary">Overall</span>
+                    <span className="font-mono text-lg font-bold text-primary">{summary.Overall}%</span>
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="text-xs font-medium text-text-muted mb-1">{summary.scoredCount} of {summary.totalCount} rows scored</div>
-                  <div className="w-32 h-1.5 bg-background rounded-full overflow-hidden border border-border/50">
+                  <div className="mb-1 text-xs font-medium text-text-muted">{summary.scoredCount} of {summary.totalCount} rows scored</div>
+                  <div className="h-1.5 w-32 overflow-hidden rounded-full border border-border/50 bg-background">
                     <div className="h-full bg-primary transition-all" style={{ width: `${(summary.scoredCount / summary.totalCount) * 100}%` }} />
                   </div>
                 </div>
@@ -978,89 +684,73 @@ Respond with only a JSON object: { "score": <number>, "reasoning": "<one sentenc
           </div>
 
           {scoringProgress && (
-            <div className="shrink-0 mb-6 bg-primary/10 border border-primary/30 rounded-lg p-3 flex items-center justify-between animate-pulse">
+            <div className="mb-6 flex items-center justify-between rounded-lg border border-primary/30 bg-primary/10 p-3 shrink-0 animate-pulse">
               <div className="flex items-center gap-3">
-                <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                <div className="h-5 w-5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
                 <span className="text-sm font-medium text-primary">AI Scoring in progress: {scoringProgress.current} of {scoringProgress.total}...</span>
               </div>
-              <button onClick={() => setScoringProgress(null)} className="text-xs font-bold text-primary hover:underline">Cancel</button>
             </div>
           )}
 
-          <div className="flex-1 overflow-auto border border-border rounded-xl bg-panel/30 scrollbar-thin">
-            <table className="w-full text-left text-sm border-collapse table-auto">
+          <div className="flex-1 overflow-auto rounded-xl border border-border bg-panel/30">
+            <table className="w-full table-auto border-collapse text-left text-sm">
               <thead>
-                <tr className="bg-background/50 border-b border-border sticky top-0 z-10">
-                  <th className="w-12 px-4 py-4 text-[10px] font-bold text-text-muted uppercase tracking-widest text-center">#</th>
-                  <th className="px-4 py-4 text-[10px] font-bold text-text-muted uppercase tracking-widest">Input Variables</th>
-                  <th className="px-4 py-4 text-[10px] font-bold text-text-muted uppercase tracking-widest w-1/4">Output</th>
-                  {METRICS.slice(0, 2).map(m => (
-                    <th key={m} className="px-4 py-4 text-[10px] font-bold text-text-muted uppercase tracking-widest text-center w-24">{m}</th>
+                <tr className="sticky top-0 z-10 border-b border-border bg-background/50">
+                  <th className="w-12 px-4 py-4 text-center text-[10px] font-bold uppercase tracking-widest text-text-muted">#</th>
+                  <th className="px-4 py-4 text-[10px] font-bold uppercase tracking-widest text-text-muted">Input Variables</th>
+                  <th className="w-1/4 px-4 py-4 text-[10px] font-bold uppercase tracking-widest text-text-muted">Output</th>
+                  {METRICS.slice(0, 2).map((metric) => (
+                    <th key={metric} className="w-24 px-4 py-4 text-center text-[10px] font-bold uppercase tracking-widest text-text-muted">{metric}</th>
                   ))}
-                  <th className="px-4 py-4 text-[10px] font-bold text-text-muted uppercase tracking-widest text-center w-32">Overall</th>
-                  <th className="px-4 py-4 text-[10px] font-bold text-text-muted uppercase tracking-widest text-center w-24">Status</th>
+                  <th className="w-32 px-4 py-4 text-center text-[10px] font-bold uppercase tracking-widest text-text-muted">Overall</th>
+                  <th className="w-24 px-4 py-4 text-center text-[10px] font-bold uppercase tracking-widest text-text-muted">Status</th>
                   <th className="w-12"></th>
                 </tr>
               </thead>
               <tbody>
-                {datasetExps.map((exp, idx) => {
-                  const isExpanded = expandedRows.has(exp.id);
-                  const rowOverall = METRICS.reduce((acc, m) => acc + (exp.scores?.[m] || 0), 0) / METRICS.length;
-                  const hasScores = exp.scores && Object.keys(exp.scores).length > 0;
+                {datasetExps.map((experiment, index) => {
+                  const isExpanded = expandedRows.has(experiment.id);
+                  const rowOverall = METRICS.reduce((sum, metric) => sum + (experiment.scores?.[metric] || 0), 0) / METRICS.length;
+                  const hasScores = experiment.scores && Object.keys(experiment.scores).length > 0;
 
                   return (
-                    <React.Fragment key={exp.id}>
-                      <tr 
-                        onClick={() => toggleRow(exp.id)}
-                        className={cn(
-                          "border-b border-border hover:bg-white/[0.02] transition-colors cursor-pointer group",
-                          isExpanded && "bg-white/[0.03]"
-                        )}
-                      >
-                        <td className="px-4 py-4 text-xs font-mono text-text-muted text-center">{idx + 1}</td>
+                    <Fragment key={experiment.id}>
+                      <tr onClick={() => toggleRow(experiment.id)} className={cn('group cursor-pointer border-b border-border transition-colors hover:bg-white/[0.02]', isExpanded && 'bg-white/[0.03]')}>
+                        <td className="px-4 py-4 text-center font-mono text-xs text-text-muted">{index + 1}</td>
                         <td className="px-4 py-4">
                           <div className="flex flex-wrap gap-1.5">
-                            {Object.entries(exp.variableValues || {}).map(([k, v]) => (
-                              <span key={k} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/5 border border-border text-text-muted">
-                                <span className="text-primary/70">{k}=</span>{String(v)}
+                            {Object.entries(experiment.variableValues || {}).map(([key, value]) => (
+                              <span key={key} className="rounded border border-border bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
+                                <span className="text-primary/70">{key}=</span>{String(value)}
                               </span>
                             ))}
                           </div>
                         </td>
                         <td className="px-4 py-4">
-                          <p className="text-xs text-text-main line-clamp-2 leading-relaxed opacity-80">
-                            {exp.output || <span className="text-text-muted italic">No output</span>}
+                          <p className="line-clamp-2 text-xs leading-relaxed text-text-main opacity-80">
+                            {experiment.output || <span className="italic text-text-muted">No output</span>}
                           </p>
                         </td>
-                        {METRICS.slice(0, 2).map(m => (
-                          <td key={m} className="px-4 py-4 text-center">
-                            <span className={cn(
-                              "text-xs font-bold font-mono",
-                              exp.scores?.[m] ? (exp.scores[m] > 80 ? "text-primary" : "text-text-main") : "text-text-muted opacity-30"
-                            )}>
-                              {exp.scores?.[m] ?? '--'}
+                        {METRICS.slice(0, 2).map((metric) => (
+                          <td key={metric} className="px-4 py-4 text-center">
+                            <span className={cn('font-mono text-xs font-bold', experiment.scores?.[metric] ? (experiment.scores[metric] > 80 ? 'text-primary' : 'text-text-main') : 'text-text-muted opacity-30')}>
+                              {experiment.scores?.[metric] ?? '--'}
                             </span>
                           </td>
                         ))}
                         <td className="px-4 py-4">
                           <div className="flex items-center gap-3">
-                            <div className="flex-1 h-1.5 bg-background rounded-full overflow-hidden border border-border/50">
-                              <div 
-                                className={cn("h-full transition-all", hasScores ? "bg-primary" : "opacity-0")} 
-                                style={{ width: `${rowOverall}%` }} 
-                              />
+                            <div className="h-1.5 flex-1 overflow-hidden rounded-full border border-border/50 bg-background">
+                              <div className={cn('h-full transition-all', hasScores ? 'bg-primary' : 'opacity-0')} style={{ width: `${rowOverall}%` }} />
                             </div>
-                            <span className={cn("text-[10px] font-bold font-mono w-8 text-right", hasScores ? "text-text-main" : "text-text-muted opacity-30")}>
+                            <span className={cn('w-8 text-right font-mono text-[10px] font-bold', hasScores ? 'text-text-main' : 'text-text-muted opacity-30')}>
                               {hasScores ? `${rowOverall.toFixed(0)}%` : '--'}
                             </span>
                           </div>
                         </td>
                         <td className="px-4 py-4 text-center">
-                          <span className={cn(
-                            "text-[9px] font-black uppercase tracking-tighter px-2 py-0.5 rounded-full border",
-                            exp.status === 'success' ? "bg-primary/10 text-primary border-primary/30" : "bg-red-500/10 text-red-400 border-red-500/30"
-                          )}>
-                            {exp.status}
+                          <span className={cn('rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-tighter', experiment.status === 'success' ? 'border-primary/30 bg-primary/10 text-primary' : 'border-red-500/30 bg-red-500/10 text-red-400')}>
+                            {experiment.status}
                           </span>
                         </td>
                         <td className="px-4 py-4 text-text-muted">
@@ -1068,41 +758,30 @@ Respond with only a JSON object: { "score": <number>, "reasoning": "<one sentenc
                         </td>
                       </tr>
                       {isExpanded && (
-                        <tr className="bg-white/[0.03] border-b border-border">
+                        <tr className="border-b border-border bg-white/[0.03]">
                           <td colSpan={8} className="p-0">
-                            <div className="p-6 space-y-6 animate-in slide-in-from-top-2 duration-200">
+                            <div className="space-y-6 p-6 animate-in slide-in-from-top-2 duration-200">
                               <div className="grid grid-cols-2 gap-8">
                                 <div className="space-y-3">
-                                  <label className="text-[10px] font-bold uppercase text-text-muted tracking-widest flex items-center gap-2">
+                                  <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-text-muted">
                                     <MessageSquare size={12} /> Full Output
                                   </label>
-                                  <div className="bg-background/50 border border-border rounded-lg p-4 text-sm leading-relaxed text-text-main whitespace-pre-wrap max-h-60 overflow-y-auto scrollbar-thin font-sans">
-                                    {exp.output}
+                                  <div className="max-h-60 overflow-y-auto rounded-lg border border-border bg-background/50 p-4 text-sm leading-relaxed text-text-main whitespace-pre-wrap font-sans">
+                                    {experiment.output}
                                   </div>
                                 </div>
                                 <div className="space-y-6">
-                                  <label className="text-[10px] font-bold uppercase text-text-muted tracking-widest flex items-center gap-2">
+                                  <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-text-muted">
                                     <Settings size={12} /> Detailed Scoring
                                   </label>
                                   <div className="grid grid-cols-2 gap-x-8 gap-y-4">
-                                    {METRICS.map(m => (
-                                      <ScoreBar 
-                                        key={m}
-                                        label={m}
-                                        score={exp.scores?.[m]}
-                                        onChange={(val) => onUpdateExperiment({ ...exp, scores: { ...(exp.scores || {}), [m]: val } })}
-                                        bg={m === 'Toxicity' ? "bg-amber-500" : "bg-primary"}
-                                      />
+                                    {METRICS.map((metric) => (
+                                      <ScoreBar key={metric} label={metric} score={experiment.scores?.[metric]} onChange={(value) => onUpdateExperiment({ ...experiment, scores: { ...(experiment.scores || {}), [metric]: value } })} bg={metric === 'Toxicity' ? 'bg-amber-500' : 'bg-primary'} />
                                     ))}
                                   </div>
-                                  <div className="pt-4 space-y-2">
-                                    <label className="text-[10px] font-bold uppercase text-text-muted tracking-widest">Notes</label>
-                                    <textarea 
-                                      defaultValue={exp.notes}
-                                      onBlur={(e) => onUpdateExperiment({ ...exp, notes: e.target.value })}
-                                      placeholder="Add evaluation notes..."
-                                      className="w-full bg-background border border-border rounded-lg p-3 text-xs text-text-main focus:outline-none focus:border-primary/50 transition-all h-20 resize-none"
-                                    />
+                                  <div className="space-y-2 pt-4">
+                                    <label className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Notes</label>
+                                    <textarea defaultValue={experiment.notes} onBlur={(e) => onUpdateExperiment({ ...experiment, notes: e.target.value })} placeholder="Add evaluation notes..." className="h-20 w-full resize-none rounded-lg border border-border bg-background p-3 text-xs text-text-main transition-all focus:border-primary/50 focus:outline-none" />
                                   </div>
                                 </div>
                               </div>
@@ -1110,7 +789,7 @@ Respond with only a JSON object: { "score": <number>, "reasoning": "<one sentenc
                           </td>
                         </tr>
                       )}
-                    </React.Fragment>
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -1120,12 +799,43 @@ Respond with only a JSON object: { "score": <number>, "reasoning": "<one sentenc
       )}
 
       {isAIScoringOpen && (
-        <AIScoringModal 
-          dataset={datasets.find(d => d.id === selectedDatasetId)}
-          onCancel={() => setIsAIScoringOpen(false)}
-          onConfirm={handleRunAIScoring}
-        />
+        <AIScoringModal dataset={datasets.find((dataset) => dataset.id === selectedDatasetId)} onCancel={() => setIsAIScoringOpen(false)} onConfirm={handleRunAIScoring} />
       )}
+    </div>
+  );
+}
+
+function MiniTab({ active, onClick, children }) {
+  return (
+    <button onClick={onClick} className={cn('rounded-md px-4 py-1.5 text-xs font-bold transition-all', active ? 'bg-background text-primary shadow-sm' : 'text-text-muted hover:text-text-main')}>
+      {children}
+    </button>
+  );
+}
+
+function SelectField({ label, value, onChange, options, placeholder }) {
+  return (
+    <div className="space-y-2">
+      <label className="text-[10px] font-bold uppercase tracking-widest text-text-muted">{label}</label>
+      <select value={value} onChange={(e) => onChange(e.target.value)} className="w-full rounded-lg border border-border bg-panel px-4 py-3 text-sm text-text-main focus:border-primary focus:outline-none">
+        <option value="">{placeholder}</option>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function FilterField({ label, value, onChange, options }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="ml-1 text-[10px] font-bold uppercase tracking-widest text-text-muted">{label}</label>
+      <select value={value} onChange={(e) => onChange(e.target.value)} className="min-w-[200px] rounded-md border border-border bg-panel px-3 py-2 text-sm text-text-main focus:border-primary focus:outline-none">
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
     </div>
   );
 }
@@ -1134,73 +844,51 @@ function AIScoringModal({ dataset, onCancel, onConfirm }) {
   const [selectedMetrics, setSelectedMetrics] = useState(['Relevance', 'Correctness']);
   const [expectedOutputCol, setExpectedOutputCol] = useState('');
 
-  const toggleMetric = (m) => {
-    setSelectedMetrics(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
+  const toggleMetric = (metric) => {
+    setSelectedMetrics((prev) => prev.includes(metric) ? prev.filter((value) => value !== metric) : [...prev, metric]);
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-[100] px-4 backdrop-blur-sm">
-      <div className="bg-panel border border-border rounded-xl w-full max-w-md p-6 shadow-2xl animate-in zoom-in-95 duration-200">
-        <div className="flex items-center justify-between mb-6">
-          <h3 className="text-lg font-bold flex items-center gap-2">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-xl border border-border bg-panel p-6 shadow-2xl animate-in zoom-in-95 duration-200">
+        <div className="mb-6 flex items-center justify-between">
+          <h3 className="flex items-center gap-2 text-lg font-bold">
             <Zap className="text-primary" size={20} fill="currentColor" /> AI Scoring Config
           </h3>
-          <button onClick={onCancel} className="text-text-muted hover:text-text-white transition-colors"><X size={20} /></button>
+          <button onClick={onCancel} className="text-text-muted transition-colors hover:text-text-main"><X size={20} /></button>
         </div>
 
         <div className="space-y-6">
           <div>
-            <label className="text-[10px] font-bold uppercase text-text-muted tracking-widest block mb-3">Select Metrics to Score</label>
+            <label className="mb-3 block text-[10px] font-bold uppercase tracking-widest text-text-muted">Select Metrics to Score</label>
             <div className="grid grid-cols-2 gap-3">
-              {METRICS.map(m => (
-                <button 
-                  key={m}
-                  onClick={() => toggleMetric(m)}
-                  className={cn(
-                    "flex items-center justify-between p-3 rounded-lg border transition-all text-xs font-medium",
-                    selectedMetrics.includes(m) 
-                      ? "bg-primary/10 border-primary/50 text-primary" 
-                      : "bg-background border-border text-text-muted hover:border-primary/30"
-                  )}
-                >
-                  {m}
-                  {selectedMetrics.includes(m) && <CheckCircle2 size={14} />}
+              {METRICS.map((metric) => (
+                <button key={metric} onClick={() => toggleMetric(metric)} className={cn('flex items-center justify-between rounded-lg border p-3 text-xs font-medium transition-all', selectedMetrics.includes(metric) ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border bg-background text-text-muted hover:border-primary/30')}>
+                  {metric}
+                  {selectedMetrics.includes(metric) && <CheckCircle2 size={14} />}
                 </button>
               ))}
             </div>
           </div>
 
           <div>
-            <label className="text-[10px] font-bold uppercase text-text-muted tracking-widest block mb-2">Expected Output Reference</label>
-            <select 
-              value={expectedOutputCol}
-              onChange={e => setExpectedOutputCol(e.target.value)}
-              className="w-full bg-background border border-border rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-primary text-text-main"
-            >
+            <label className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-text-muted">Expected Output Reference</label>
+            <select value={expectedOutputCol} onChange={(e) => setExpectedOutputCol(e.target.value)} className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm text-text-main focus:border-primary focus:outline-none">
               <option value="">None (General Evaluation)</option>
-              {dataset?.columns?.map(col => (
-                <option key={col} value={col}>Column: {col}</option>
+              {dataset?.columns?.map((column) => (
+                <option key={column} value={column}>Column: {column}</option>
               ))}
             </select>
-            <p className="text-[10px] text-text-muted mt-2 flex items-start gap-1.5">
+            <p className="mt-2 flex items-start gap-1.5 text-[10px] text-text-muted">
               <Info size={12} className="shrink-0" />
               Providing an expected output helps the AI score Correctness accurately.
             </p>
           </div>
         </div>
 
-        <div className="flex gap-3 mt-8">
-          <button 
-            onClick={onCancel}
-            className="flex-1 py-2.5 text-sm font-bold text-text-muted hover:text-text-main transition-colors"
-          >
-            Cancel
-          </button>
-          <button 
-            onClick={() => onConfirm({ metrics: selectedMetrics, expectedOutputCol })}
-            disabled={selectedMetrics.length === 0}
-            className="flex-1 py-2.5 bg-primary text-panel font-bold rounded-lg hover:bg-primary/90 transition-all disabled:opacity-50"
-          >
+        <div className="mt-8 flex gap-3">
+          <button onClick={onCancel} className="flex-1 py-2.5 text-sm font-bold text-text-muted transition-colors hover:text-text-main">Cancel</button>
+          <button onClick={() => onConfirm({ metrics: selectedMetrics, expectedOutputCol })} disabled={selectedMetrics.length === 0} className="flex-1 rounded-lg bg-primary py-2.5 font-bold text-panel transition-all hover:bg-primary/90 disabled:opacity-50">
             Run AI Scoring
           </button>
         </div>
@@ -1211,18 +899,15 @@ function AIScoringModal({ dataset, onCancel, onConfirm }) {
 
 function EvalEmptyState() {
   return (
-    <div className="h-full flex flex-col items-center justify-center p-8 animate-in fade-in duration-500">
-      <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center text-primary mb-6">
+    <div className="flex h-full flex-col items-center justify-center p-8 animate-in fade-in duration-500">
+      <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-primary/10 text-primary">
         <FlaskConical size={40} />
       </div>
-      <h2 className="text-2xl font-bold mb-2 text-text-main">No evaluation data yet</h2>
-      <p className="text-text-muted text-center max-w-md mb-8">
-        Run some prompts in Prompt Studio or use the "Run New Batch" mode to generate outputs.
+      <h2 className="mb-2 text-2xl font-bold text-text-main">No evaluation data yet</h2>
+      <p className="mb-8 max-w-md text-center text-text-muted">
+        Run some prompts in Prompt Studio or use the &quot;Run New Batch&quot; mode to generate outputs.
       </p>
-      <button 
-        onClick={() => window.location.hash = '#/prompt-studio'}
-        className="px-6 py-3 bg-primary text-panel font-bold rounded-lg hover:bg-primary/90 transition-all flex items-center gap-2"
-      >
+      <button className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 font-bold text-panel transition-all hover:bg-primary/90">
         Go to Prompt Studio <ChevronRight size={18} />
       </button>
     </div>
@@ -1232,75 +917,50 @@ function EvalEmptyState() {
 function EvalPanel({ exp, isWinner, isTie, onUpdateScore }) {
   if (!exp) {
     return (
-      <div className="glass-panel rounded-xl flex items-center justify-center border-dashed border-2 border-border/50">
-        <div className="text-center p-8">
-          <AlertCircle className="mx-auto text-text-muted opacity-30 mb-4" size={40} />
-          <p className="text-text-muted font-medium">Select an experiment to compare</p>
+      <div className="glass-panel flex items-center justify-center rounded-xl border-2 border-dashed border-border/50">
+        <div className="p-8 text-center">
+          <AlertCircle className="mx-auto mb-4 text-text-muted opacity-30" size={40} />
+          <p className="font-medium text-text-muted">Select an experiment to compare</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className={cn(
-      "glass-panel rounded-xl flex flex-col overflow-y-auto transition-all duration-500",
-      isWinner ? "border-primary/50 ring-1 ring-primary/20 shadow-lg shadow-primary/5" : "border-border",
-      isTie ? "border-amber-500/50 ring-1 ring-amber-500/20" : ""
-    )}>
-      <div className="p-4 border-b border-border bg-background/50 flex justify-between items-center shrink-0">
+    <div className={cn('glass-panel flex flex-col overflow-y-auto rounded-xl transition-all duration-500', isWinner ? 'border-primary/50 ring-1 ring-primary/20 shadow-lg shadow-primary/5' : 'border-border', isTie ? 'border-amber-500/50 ring-1 ring-amber-500/20' : '')}>
+      <div className="flex items-center justify-between border-b border-border bg-background/50 p-4 shrink-0">
         <div className="flex items-center gap-3">
-          <span className={cn(
-            "font-mono text-xs px-2 py-0.5 rounded border transition-colors",
-            isWinner ? "bg-primary/20 text-primary border-primary/50" : "bg-panel text-text-muted border-border"
-          )}>{exp.version}</span>
-          <span className="text-sm font-bold tracking-tight text-text-main">{exp.modelId}</span>
-          <span className="text-[10px] text-text-muted uppercase font-mono bg-white/5 px-1.5 py-0.5 rounded">{exp.provider}</span>
+          <span className={cn('rounded border px-2 py-0.5 font-mono text-xs transition-colors', isWinner ? 'border-primary/50 bg-primary/20 text-primary' : 'border-border bg-panel text-text-muted')}>{exp.promptVersion}</span>
+          <span className="text-sm font-bold tracking-tight text-text-main">{exp.modelName || exp.model}</span>
+          <span className="rounded bg-white/5 px-1.5 py-0.5 font-mono text-[10px] uppercase text-text-muted">{exp.provider}</span>
         </div>
-        {isWinner && <div className="text-[10px] font-black text-primary flex items-center gap-1 uppercase tracking-tighter bg-primary/10 px-2 py-1 rounded-full"><CheckCircle2 size={12} /> WINNER</div>}
-        {isTie && <div className="text-[10px] font-black text-amber-500 flex items-center gap-1 uppercase tracking-tighter bg-amber-500/10 px-2 py-1 rounded-full">TIE</div>}
+        {isWinner && <div className="flex items-center gap-1 rounded-full bg-primary/10 px-2 py-1 text-[10px] font-black uppercase tracking-tighter text-primary"><CheckCircle2 size={12} /> WINNER</div>}
+        {isTie && <div className="rounded-full bg-amber-500/10 px-2 py-1 text-[10px] font-black uppercase tracking-tighter text-amber-500">TIE</div>}
       </div>
 
-      <div className="p-5 space-y-6 flex-1 text-text-main">
-        {/* Output */}
+      <div className="flex-1 space-y-6 p-5 text-text-main">
         <div className="flex flex-col gap-2">
-          <label className="text-[10px] font-bold uppercase text-text-muted tracking-widest flex justify-between">
+          <label className="flex justify-between text-[10px] font-bold uppercase tracking-widest text-text-muted">
             Output
             <span className="font-mono text-[9px] lowercase opacity-50">{exp.output?.length || 0} chars</span>
           </label>
-          <div className="min-h-[200px] bg-background/50 border border-border rounded-lg p-4 text-sm font-sans whitespace-pre-wrap break-words text-text-main leading-relaxed">
-            {exp.output || <span className="text-text-muted italic">No output recorded</span>}
+          <div className="min-h-[200px] rounded-lg border border-border bg-background/50 p-4 text-sm leading-relaxed text-text-main whitespace-pre-wrap break-words">
+            {exp.output || <span className="italic text-text-muted">No output recorded</span>}
           </div>
         </div>
 
-        {/* Metadata */}
-        <div className="grid grid-cols-3 gap-3 p-3 bg-panel/50 rounded-lg border border-border/50">
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[9px] uppercase font-bold text-text-muted tracking-tighter flex items-center gap-1"><Zap size={10} /> Latency</span>
-            <span className="text-xs font-mono text-text-main">{exp.latencyMs || exp.latency || 0}ms</span>
-          </div>
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[9px] uppercase font-bold text-text-muted tracking-tighter flex items-center gap-1"><TrendingUp size={10} /> Tokens</span>
-            <span className="text-xs font-mono text-text-main">{exp.totalTokens || exp.tokens || 0}</span>
-          </div>
-          <div className="flex flex-col gap-0.5">
-            <span className="text-[9px] uppercase font-bold text-text-muted tracking-tighter flex items-center gap-1"><Coins size={10} /> Cost</span>
-            <span className="text-xs font-mono text-text-main">${typeof exp.costEstimate === 'number' ? exp.costEstimate.toFixed(4) : (exp.cost || 0)}</span>
-          </div>
+        <div className="grid grid-cols-3 gap-3 rounded-lg border border-border/50 bg-panel/50 p-3">
+          <InfoMetric icon={<Zap size={10} />} label="Latency" value={`${exp.latencyMs || 0}ms`} />
+          <InfoMetric icon={<TrendingUp size={10} />} label="Tokens" value={exp.totalTokens || 0} />
+          <InfoMetric icon={<Coins size={10} />} label="Cost" value={`$${typeof exp.costEstimate === 'number' ? exp.costEstimate.toFixed(4) : (exp.costEstimate || 0)}`} />
         </div>
 
-        {/* Metrics */}
-        <div className="space-y-4 pt-2 pb-4">
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-[10px] font-bold uppercase text-text-muted tracking-widest">Metrics & Scoring</label>
+        <div className="space-y-4 pb-4 pt-2">
+          <div className="mb-2 flex items-center justify-between">
+            <label className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Metrics & Scoring</label>
           </div>
-          {METRICS.map(metric => (
-            <ScoreBar 
-              key={metric}
-              label={metric} 
-              score={(exp.scores || {})[metric]} 
-              onChange={(val) => onUpdateScore(metric, val)}
-              bg={metric === 'Toxicity' ? "bg-amber-500" : "bg-primary"}
-            />
+          {METRICS.map((metric) => (
+            <ScoreBar key={metric} label={metric} score={(exp.scores || {})[metric]} onChange={(value) => onUpdateScore(metric, value)} bg={metric === 'Toxicity' ? 'bg-amber-500' : 'bg-primary'} />
           ))}
         </div>
       </div>
@@ -1308,37 +968,33 @@ function EvalPanel({ exp, isWinner, isTie, onUpdateScore }) {
   );
 }
 
-function ScoreBar({ label, score, onChange, bg = "bg-primary" }) {
+function InfoMetric({ icon, label, value }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-tighter text-text-muted">{icon} {label}</span>
+      <span className="font-mono text-xs text-text-main">{value}</span>
+    </div>
+  );
+}
+
+function ScoreBar({ label, score, onChange, bg = 'bg-primary' }) {
   const hasScore = typeof score === 'number';
   const displayScore = hasScore ? score : 0;
 
   return (
     <div className="group space-y-1.5">
-      <div className="flex justify-between items-end text-[10px]">
-        <span className="text-text-muted font-medium">{label}</span>
-        <span className={cn("font-mono font-bold", hasScore ? "text-text-main" : "text-text-muted italic")}>
+      <div className="flex items-end justify-between text-[10px]">
+        <span className="font-medium text-text-muted">{label}</span>
+        <span className={cn('font-mono font-bold', hasScore ? 'text-text-main' : 'italic text-text-muted')}>
           {hasScore ? `${score}%` : 'Click to score'}
         </span>
       </div>
-      <div className="relative h-2 flex items-center group/slider">
-        <input 
-          type="range" 
-          min="0" 
-          max="100" 
-          value={displayScore}
-          onChange={(e) => onChange(parseInt(e.target.value))}
-          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-        />
-        <div className="w-full h-1.5 bg-background rounded-full overflow-hidden border border-border/50">
-          <div 
-            className={cn("h-full transition-all duration-300", bg, !hasScore && "opacity-0")} 
-            style={{ width: `${displayScore}%` }} 
-          />
+      <div className="group/slider relative flex h-2 items-center">
+        <input type="range" min="0" max="100" value={displayScore} onChange={(e) => onChange(parseInt(e.target.value, 10))} className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0" />
+        <div className="h-1.5 w-full overflow-hidden rounded-full border border-border/50 bg-background">
+          <div className={cn('h-full transition-all duration-300', bg, !hasScore && 'opacity-0')} style={{ width: `${displayScore}%` }} />
         </div>
-        <div 
-          className="absolute h-3 w-3 bg-white rounded-full border-2 border-primary shadow-sm pointer-events-none opacity-0 group-hover/slider:opacity-100 transition-opacity"
-          style={{ left: `calc(${displayScore}% - 6px)` }}
-        />
+        <div className="pointer-events-none absolute h-3 w-3 rounded-full border-2 border-primary bg-white opacity-0 shadow-sm transition-opacity group-hover/slider:opacity-100" style={{ left: `calc(${displayScore}% - 6px)` }} />
       </div>
     </div>
   );

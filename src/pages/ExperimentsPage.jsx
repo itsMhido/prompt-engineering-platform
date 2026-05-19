@@ -1,24 +1,8 @@
-﻿import React, { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FlaskConical } from 'lucide-react';
-import { cn } from '../utils/helpers';
-import { loadExperiments, deleteExperiment, updateExperimentScore, updateExperimentNotes } from '../utils/mockApi';
+import { bulkDeleteExperiments, listExperiments, removeExperiment, updateExperiment } from '../utils/api';
 
-export default
-function ExperimentsView() {
-  const timeAgoShort = (dateString) => {
-    const seconds = Math.floor((new Date() - new Date(dateString)) / 1000);
-    let interval = seconds / 31536000;
-    if (interval > 1) return Math.floor(interval) + "y ago";
-    interval = seconds / 2592000;
-    if (interval > 1) return Math.floor(interval) + "mo ago";
-    interval = seconds / 86400;
-    if (interval > 1) return Math.floor(interval) + "d ago";
-    interval = seconds / 3600;
-    if (interval > 1) return Math.floor(interval) + "h ago";
-    interval = seconds / 60;
-    if (interval > 1) return Math.floor(interval) + "m ago";
-    return "just now";
-  };
+export default function ExperimentsView() {
   const [experiments, setExperiments] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
@@ -29,337 +13,294 @@ function ExperimentsView() {
   const [filterDateRange, setFilterDateRange] = useState('all');
   const [sortField, setSortField] = useState('timestamp');
   const [sortDir, setSortDir] = useState('desc');
-  const [selectedExperimentId, setSelectedExperimentId] = useState(null);
   const [selectedRows, setSelectedRows] = useState(new Set());
-  const [compareMode, setCompareMode] = useState(false);
-  const [compareIds, setCompareIds] = useState([]);
   const [detailedExperiment, setDetailedExperiment] = useState(null);
-  const [scoreInput, setScoreInput] = useState(null);
   const [notesInput, setNotesInput] = useState('');
-  const [tagsInput, setTagsInput] = useState('');
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    loadExperiments().then(data => {
-      setExperiments(data);
-      setIsLoading(false);
-    });
+    (async () => {
+      try {
+        const data = await listExperiments();
+        setExperiments(data);
+      } catch (err) {
+        setError(err.message || 'Failed to load experiments.');
+      } finally {
+        setIsLoading(false);
+      }
+    })();
   }, []);
 
-  // Lock body scroll when drawer is open
   useEffect(() => {
-    if (detailedExperiment) {
-      document.body.style.overflow = 'hidden';
-    } else {
+    document.body.style.overflow = detailedExperiment ? 'hidden' : '';
+    return () => {
       document.body.style.overflow = '';
-    }
-    return () => { document.body.style.overflow = ''; };
+    };
   }, [detailedExperiment]);
 
-  // ESC key closes drawer
   useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape' && detailedExperiment) {
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape' && detailedExperiment) {
         setDetailedExperiment(null);
       }
     };
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [detailedExperiment]);
 
   const isFiltered = searchText || filterModel || filterVersion || filterPrompt || filterStatus !== '' || filterDateRange !== 'all';
 
-  const getDateRangeFilter = () => {
+  const filteredExperiments = useMemo(() => {
     const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const week7DaysAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const month30DaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const sevenDaysAgo = new Date(startOfToday.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(startOfToday.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    return exp => {
-      if (filterDateRange === 'today') return new Date(exp.timestamp) >= today;
-      if (filterDateRange === 'week') return new Date(exp.timestamp) >= week7DaysAgo;
-      if (filterDateRange === 'month') return new Date(exp.timestamp) >= month30DaysAgo;
-      return true;
+    return experiments
+      .filter((experiment) => {
+        if (filterDateRange === 'today') {
+          return new Date(experiment.timestamp) >= startOfToday;
+        }
+        if (filterDateRange === 'week') {
+          return new Date(experiment.timestamp) >= sevenDaysAgo;
+        }
+        if (filterDateRange === 'month') {
+          return new Date(experiment.timestamp) >= thirtyDaysAgo;
+        }
+        return true;
+      })
+      .filter((experiment) => !filterStatus || experiment.status === filterStatus)
+      .filter((experiment) => !filterModel || experiment.provider === filterModel)
+      .filter((experiment) => !filterPrompt || experiment.promptName === filterPrompt)
+      .filter((experiment) => !filterVersion || experiment.promptVersion === filterVersion)
+      .filter((experiment) => {
+        if (!searchText) {
+          return true;
+        }
+
+        const lowerText = searchText.toLowerCase();
+        return (
+          experiment.promptName?.toLowerCase().includes(lowerText)
+          || experiment.output?.toLowerCase().includes(lowerText)
+          || JSON.stringify(experiment.variableValues || {}).toLowerCase().includes(lowerText)
+        );
+      })
+      .sort((left, right) => {
+        let leftValue = left[sortField];
+        let rightValue = right[sortField];
+
+        if (sortField === 'timestamp') {
+          leftValue = new Date(leftValue).getTime();
+          rightValue = new Date(rightValue).getTime();
+        } else if (typeof leftValue === 'string') {
+          leftValue = leftValue.toLowerCase();
+          rightValue = rightValue.toLowerCase();
+        }
+
+        if (leftValue < rightValue) {
+          return sortDir === 'asc' ? -1 : 1;
+        }
+        if (leftValue > rightValue) {
+          return sortDir === 'asc' ? 1 : -1;
+        }
+        return 0;
+      });
+  }, [experiments, filterDateRange, filterStatus, filterModel, filterPrompt, filterVersion, searchText, sortField, sortDir]);
+
+  const uniqueModels = Array.from(new Set(experiments.map((experiment) => experiment.provider).filter(Boolean)));
+  const uniqueVersions = Array.from(new Set(experiments.map((experiment) => experiment.promptVersion).filter(Boolean)));
+  const uniquePrompts = Array.from(new Set(experiments.map((experiment) => experiment.promptName).filter(Boolean)));
+
+  const stats = useMemo(() => {
+    const successfulExperiments = filteredExperiments.filter((experiment) => experiment.status === 'success');
+    const scoredExperiments = filteredExperiments.filter((experiment) => experiment.score !== null && experiment.score !== undefined);
+
+    return {
+      totalRuns: filteredExperiments.length,
+      avgLatency: successfulExperiments.length > 0
+        ? Math.round(successfulExperiments.reduce((sum, experiment) => sum + (experiment.latencyMs || 0), 0) / successfulExperiments.length)
+        : 0,
+      avgScore: scoredExperiments.length > 0
+        ? Math.round(scoredExperiments.reduce((sum, experiment) => sum + experiment.score, 0) / scoredExperiments.length)
+        : null,
+      totalCost: filteredExperiments.reduce((sum, experiment) => sum + Number(experiment.costEstimate || 0), 0).toFixed(4)
     };
-  };
-
-  const filteredExperiments = experiments
-    .filter(getDateRangeFilter())
-    .filter(exp => !filterStatus || exp.status === filterStatus)
-    .filter(exp => !filterModel || exp.provider === filterModel)
-    .filter(exp => !filterPrompt || exp.promptName === filterPrompt)
-    .filter(exp => !filterVersion || exp.promptVersion === filterVersion)
-    .filter(exp => {
-      if (!searchText) return true;
-      const lowerText = searchText.toLowerCase();
-      return (
-        exp.promptName?.toLowerCase().includes(lowerText) ||
-        exp.output?.toLowerCase().includes(lowerText) ||
-        JSON.stringify(exp.variableValues)?.toLowerCase().includes(lowerText)
-      );
-    })
-    .sort((a, b) => {
-      let aVal = a[sortField];
-      let bVal = b[sortField];
-      if (sortField === 'timestamp') {
-        aVal = new Date(aVal).getTime();
-        bVal = new Date(bVal).getTime();
-      } else if (typeof aVal === 'string') {
-        aVal = aVal.toLowerCase();
-        bVal = bVal.toLowerCase();
-      }
-      if (aVal < bVal) return sortDir === 'asc' ? -1 : 1;
-      if (aVal > bVal) return sortDir === 'asc' ? 1 : -1;
-      return 0;
-    });
-
-  const uniqueModels = Array.from(new Set(experiments.map(e => e.provider)));
-  const uniqueVersions = Array.from(new Set(experiments.map(e => e.promptVersion)));
-  const uniquePrompts = Array.from(new Set(experiments.map(e => e.promptName).filter(Boolean)));
-
-  const stats = {
-    totalRuns: filteredExperiments.length,
-    avgLatency: filteredExperiments.filter(e => e.status === 'success').length > 0
-      ? Math.round(filteredExperiments.filter(e => e.status === 'success').reduce((sum, e) => sum + (e.latencyMs || 0), 0) / filteredExperiments.filter(e => e.status === 'success').length)
-      : 0,
-    avgScore: filteredExperiments.filter(e => e.score !== null).length > 0
-      ? Math.round(filteredExperiments.filter(e => e.score !== null).reduce((sum, e) => sum + e.score, 0) / filteredExperiments.filter(e => e.score !== null).length)
-      : null,
-    totalCost: filteredExperiments.reduce((sum, e) => {
-      const raw = e.costEstimate;
-      if (!raw) return sum;
-      if (typeof raw === 'number') return sum + raw;
-      if (typeof raw === 'string') {
-        const parsed = parseFloat(raw.replace(/[^0-9.]/g, ''));
-        return sum + (isNaN(parsed) ? 0 : parsed);
-      }
-      return sum;
-    }, 0).toFixed(4)
-  };
+  }, [filteredExperiments]);
 
   const handleSort = (field) => {
     if (sortField === field) {
       setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortDir('asc');
+      return;
     }
+
+    setSortField(field);
+    setSortDir(field === 'timestamp' ? 'desc' : 'asc');
   };
 
   const handleRowSelect = (id) => {
-    const newSelected = new Set(selectedRows);
-    if (newSelected.has(id)) {
-      newSelected.delete(id);
+    const next = new Set(selectedRows);
+    if (next.has(id)) {
+      next.delete(id);
     } else {
-      newSelected.add(id);
+      next.add(id);
     }
-    setSelectedRows(newSelected);
-    if (newSelected.size === 2) {
-      setCompareIds(Array.from(newSelected));
-      setCompareMode(true);
-    } else if (newSelected.size !== 2) {
-      setCompareMode(false);
-    }
+    setSelectedRows(next);
   };
 
   const handleSelectAll = () => {
     if (selectedRows.size === filteredExperiments.length) {
       setSelectedRows(new Set());
-    } else {
-      setSelectedRows(new Set(filteredExperiments.map(e => e.id)));
+      return;
     }
+
+    setSelectedRows(new Set(filteredExperiments.map((experiment) => experiment.id)));
   };
 
   const handleDeleteExperiment = async (id) => {
-    await deleteExperiment(id);
-    setExperiments(prev => prev.filter(e => e.id !== id));
+    try {
+      await removeExperiment(id);
+      setExperiments((prev) => prev.filter((experiment) => experiment.id !== id));
+      setSelectedRows((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    } catch (err) {
+      setError(err.message || 'Failed to delete experiment.');
+    }
   };
 
   const handleUpdateScore = async (id, score) => {
-    await updateExperimentScore(id, score);
-    setExperiments(prev => prev.map(e => e.id === id ? { ...e, score } : e));
+    try {
+      const updated = await updateExperiment(id, { score });
+      setExperiments((prev) => prev.map((experiment) => experiment.id === id ? updated : experiment));
+      if (detailedExperiment?.id === id) {
+        setDetailedExperiment(updated);
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to update score.');
+    }
   };
 
   const handleUpdateNotes = async (id, notes) => {
-    await updateExperimentNotes(id, notes);
-    setExperiments(prev => prev.map(e => e.id === id ? { ...e, notes } : e));
+    try {
+      const updated = await updateExperiment(id, { notes });
+      setExperiments((prev) => prev.map((experiment) => experiment.id === id ? updated : experiment));
+      if (detailedExperiment?.id === id) {
+        setDetailedExperiment(updated);
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to update notes.');
+    }
   };
 
-  const getLatencyColor = (ms) => {
+  const handleDeleteSelected = async () => {
+    try {
+      await bulkDeleteExperiments(Array.from(selectedRows));
+      setExperiments((prev) => prev.filter((experiment) => !selectedRows.has(experiment.id)));
+      setSelectedRows(new Set());
+    } catch (err) {
+      setError(err.message || 'Failed to delete selected experiments.');
+    }
+  };
+
+  const handleExportSelected = () => {
+    const toExport = filteredExperiments.filter((experiment) => selectedRows.has(experiment.id));
+    const blob = new Blob([JSON.stringify(toExport, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `experiments-${new Date().toISOString().split('T')[0]}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const getLatencyColor = (ms = 0) => {
     if (ms < 500) return 'text-green-500/80';
     if (ms < 1500) return 'text-yellow-500/80';
     return 'text-red-500/80';
   };
 
-  const handleDeleteSelected = () => {
-    selectedRows.forEach(id => deleteExperiment(id));
-    setExperiments(prev => prev.filter(e => !selectedRows.has(e.id)));
-    setSelectedRows(new Set());
-  };
-
-  const handleExportSelected = () => {
-    const toExport = filteredExperiments.filter(e => selectedRows.has(e.id));
-    const json = JSON.stringify(toExport, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `experiments-${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const timeAgoShort = (dateString) => {
+    const seconds = Math.floor((new Date() - new Date(dateString)) / 1000);
+    let interval = seconds / 31536000;
+    if (interval > 1) return `${Math.floor(interval)}y ago`;
+    interval = seconds / 2592000;
+    if (interval > 1) return `${Math.floor(interval)}mo ago`;
+    interval = seconds / 86400;
+    if (interval > 1) return `${Math.floor(interval)}d ago`;
+    interval = seconds / 3600;
+    if (interval > 1) return `${Math.floor(interval)}h ago`;
+    interval = seconds / 60;
+    if (interval > 1) return `${Math.floor(interval)}m ago`;
+    return 'just now';
   };
 
   const SortIndicator = ({ field }) => {
-    if (sortField !== field) return null;
-    return <span className="text-primary text-xs ml-1">{sortDir === 'asc' ? 'â†‘' : 'â†“'}</span>;
+    if (sortField !== field) {
+      return null;
+    }
+    return <span className="ml-1 text-xs text-primary">{sortDir === 'asc' ? '↑' : '↓'}</span>;
   };
 
-  if (isLoading) return <div className="p-8 text-text-muted">Loading experiments...</div>;
-
-  const renderDetailDrawer = () => {
-    if (!detailedExperiment) return null;
-    const exp = detailedExperiment;
-
-    return (
-      <>
-        {/* Backdrop â€” sibling of drawer, NEVER a parent wrapper */}
-        <div
-          className="fixed inset-0 bg-black/40"
-          style={{ zIndex: 40 }}
-          onClick={() => setDetailedExperiment(null)}
-        />
-        {/* Drawer â€” sits on top with its own fixed position */}
-        <div
-          className="fixed top-0 right-0 h-screen w-full max-w-2xl bg-panel border-l border-border flex flex-col animate-in slide-in-from-right duration-300"
-          style={{ zIndex: 50, overflowY: 'auto', overflowX: 'hidden' }}
-        >
-          <div className="p-6 border-b border-border flex justify-between items-start sticky top-0 bg-panel z-10">
-            <div className="flex items-center gap-3">
-              <span className="font-mono text-xs px-2 py-0.5 rounded border bg-primary/10 text-primary border-primary/30">{exp.promptVersion}</span>
-              <span className="text-xs px-2 py-0.5 rounded border bg-white/5 border-border text-text-main">{exp.promptName || 'Unknown Prompt'}</span>
-              <span className="text-sm font-medium text-text-muted">{exp.model} · {exp.provider}</span>
-            </div>
-            <button onClick={() => setDetailedExperiment(null)} className="text-text-muted hover:text-text-main text-lg leading-none">âœ•</button>
-          </div>
-
-          <div className="p-6 space-y-6">
-            <div className="space-y-4">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-primary">System Prompt</h3>
-              <div className="bg-background p-4 rounded border border-border text-text-main text-sm font-mono whitespace-pre-wrap break-words">{exp.systemPrompt}</div>
-            </div>
-
-            <div className="space-y-4">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-primary">User Template</h3>
-              <div className="bg-background p-4 rounded border border-border text-text-main text-sm font-mono whitespace-pre-wrap break-words">{exp.userTemplate}</div>
-            </div>
-
-            {exp.variableValues && Object.keys(exp.variableValues).length > 0 && (
-              <div className="space-y-3">
-                <h3 className="text-sm font-bold uppercase tracking-wider text-primary">Variable Values</h3>
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(exp.variableValues).map(([key, val]) => (
-                    <span key={key} className="px-3 py-1 rounded bg-primary/10 border border-primary/30 text-sm text-primary font-mono">{key} = {val}</span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-xs text-text-muted mb-2">Latency</p>
-                <p className={`text-lg font-mono font-bold ${getLatencyColor(exp.latencyMs)}`}>{exp.latencyMs}ms</p>
-              </div>
-              <div>
-                <p className="text-xs text-text-muted mb-2">Tokens</p>
-                <p className="text-lg font-mono font-bold text-primary">{exp.totalTokens}</p>
-              </div>
-              <div>
-                <p className="text-xs text-text-muted mb-2">Cost</p>
-                <p className="text-lg font-mono font-bold text-green-500/80">{exp.costEstimate}</p>
-              </div>
-              <div>
-                <p className="text-xs text-text-muted mb-2">Status</p>
-                <span className={`text-sm font-bold px-2 py-1 rounded ${exp.status === 'success' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>{exp.status}</span>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-primary">Score</h3>
-              <div className="flex items-center gap-4">
-                <input type="range" min="0" max="100" step="1" value={exp.score || 0} onChange={(e) => handleUpdateScore(exp.id, parseInt(e.target.value))} className="flex-1" />
-                <span className="font-mono font-bold text-lg text-primary">{exp.score ?? 'â€”'}</span>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-primary">Notes</h3>
-              <textarea value={exp.notes || ''} onChange={(e) => setNotesInput(e.target.value)} onBlur={() => handleUpdateNotes(exp.id, notesInput)} className="w-full bg-background border border-border rounded p-3 text-text-main focus:outline-none focus:border-primary/50 resize-none" rows="4" placeholder="Add notes..." />
-            </div>
-
-            <div className="space-y-4">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-primary">Output</h3>
-              {exp.status === 'error' ? (
-                <div className="bg-red-500/10 border border-red-500/20 rounded p-4">
-                  <p className="text-red-300 text-sm font-mono">{exp.errorMessage}</p>
-                </div>
-              ) : (
-                <div className="bg-background p-4 rounded border border-border text-text-main text-sm font-mono whitespace-pre-wrap break-words">{exp.output}</div>
-              )}
-            </div>
-          </div>
-        </div>
-      </>
-    );
-  };
+  if (isLoading) {
+    return <div className="p-8 text-text-muted">Loading experiments...</div>;
+  }
 
   return (
-    <div className="p-8 h-full flex flex-col animate-in fade-in duration-300 gap-6">
+    <div className="flex h-full flex-col gap-6 p-8 animate-in fade-in duration-300">
       <div>
-        <h2 className="text-2xl font-bold tracking-tight mb-1">Experiments</h2>
+        <h2 className="mb-1 text-2xl font-bold tracking-tight">Experiments</h2>
         <p className="text-text-muted">Track and compare prompt performance over time.</p>
       </div>
 
-      {/* Stats */}
+      {error && (
+        <div className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          {error}
+        </div>
+      )}
+
       <div className="grid grid-cols-4 gap-4">
-        <div className="bg-panel border border-border rounded-lg p-4">
-          <p className="text-xs text-text-muted uppercase tracking-wider mb-2">Total Runs</p>
+        <div className="rounded-lg border border-border bg-panel p-4">
+          <p className="mb-2 text-xs uppercase tracking-wider text-text-muted">Total Runs</p>
           <p className="text-2xl font-bold text-primary">{stats.totalRuns}</p>
         </div>
-        <div className="bg-panel border border-border rounded-lg p-4">
-          <p className="text-xs text-text-muted uppercase tracking-wider mb-2">Avg Latency</p>
+        <div className="rounded-lg border border-border bg-panel p-4">
+          <p className="mb-2 text-xs uppercase tracking-wider text-text-muted">Avg Latency</p>
           <p className="text-2xl font-bold text-yellow-500/80">{stats.avgLatency}ms</p>
         </div>
-        <div className="bg-panel border border-border rounded-lg p-4">
-          <p className="text-xs text-text-muted uppercase tracking-wider mb-2">Avg Score</p>
-          <p className="text-2xl font-bold text-primary">{stats.avgScore ?? 'â€”'}</p>
+        <div className="rounded-lg border border-border bg-panel p-4">
+          <p className="mb-2 text-xs uppercase tracking-wider text-text-muted">Avg Score</p>
+          <p className="text-2xl font-bold text-primary">{stats.avgScore ?? '—'}</p>
         </div>
-        <div className="bg-panel border border-border rounded-lg p-4">
-          <p className="text-xs text-text-muted uppercase tracking-wider mb-2">Total Cost</p>
+        <div className="rounded-lg border border-border bg-panel p-4">
+          <p className="mb-2 text-xs uppercase tracking-wider text-text-muted">Total Cost</p>
           <p className="text-2xl font-bold text-green-500/80">${stats.totalCost}</p>
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="bg-panel border border-border rounded-lg p-4 space-y-4">
+      <div className="space-y-4 rounded-lg border border-border bg-panel p-4">
         <div className="grid grid-cols-6 gap-3">
-          <input type="text" placeholder="Search..." value={searchText} onChange={(e) => setSearchText(e.target.value)} className="bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-primary/50 text-text-main" />
-          <select value={filterPrompt} onChange={(e) => setFilterPrompt(e.target.value)} className="bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-primary/50 text-text-main">
+          <input type="text" placeholder="Search..." value={searchText} onChange={(e) => setSearchText(e.target.value)} className="rounded border border-border bg-background px-3 py-2 text-sm text-text-main focus:border-primary/50 focus:outline-none" />
+          <select value={filterPrompt} onChange={(e) => setFilterPrompt(e.target.value)} className="rounded border border-border bg-background px-3 py-2 text-sm text-text-main focus:border-primary/50 focus:outline-none">
             <option value="">All Prompts</option>
-            {uniquePrompts.map(p => <option key={p} value={p}>{p}</option>)}
+            {uniquePrompts.map((prompt) => <option key={prompt} value={prompt}>{prompt}</option>)}
           </select>
-          <select value={filterModel} onChange={(e) => setFilterModel(e.target.value)} className="bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-primary/50 text-text-main">
+          <select value={filterModel} onChange={(e) => setFilterModel(e.target.value)} className="rounded border border-border bg-background px-3 py-2 text-sm text-text-main focus:border-primary/50 focus:outline-none">
             <option value="">All Models</option>
-            {uniqueModels.map(m => <option key={m} value={m}>{m}</option>)}
+            {uniqueModels.map((model) => <option key={model} value={model}>{model}</option>)}
           </select>
-          <select value={filterVersion} onChange={(e) => setFilterVersion(e.target.value)} className="bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-primary/50 text-text-main">
+          <select value={filterVersion} onChange={(e) => setFilterVersion(e.target.value)} className="rounded border border-border bg-background px-3 py-2 text-sm text-text-main focus:border-primary/50 focus:outline-none">
             <option value="">All Versions</option>
-            {uniqueVersions.map(v => <option key={v} value={v}>{v}</option>)}
+            {uniqueVersions.map((version) => <option key={version} value={version}>{version}</option>)}
           </select>
-          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-primary/50 text-text-main">
+          <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="rounded border border-border bg-background px-3 py-2 text-sm text-text-main focus:border-primary/50 focus:outline-none">
             <option value="">All Status</option>
             <option value="success">Success</option>
             <option value="error">Error</option>
           </select>
-          <select value={filterDateRange} onChange={(e) => setFilterDateRange(e.target.value)} className="bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-primary/50 text-text-main">
+          <select value={filterDateRange} onChange={(e) => setFilterDateRange(e.target.value)} className="rounded border border-border bg-background px-3 py-2 text-sm text-text-main focus:border-primary/50 focus:outline-none">
             <option value="all">All Time</option>
             <option value="today">Today</option>
             <option value="week">Last 7 Days</option>
@@ -367,140 +308,99 @@ function ExperimentsView() {
           </select>
         </div>
         {isFiltered && (
-          <div className="flex justify-between items-center text-sm">
+          <div className="flex items-center justify-between text-sm">
             <span className="text-text-muted">Showing {filteredExperiments.length} of {experiments.length} experiments</span>
-            <button onClick={() => { setSearchText(''); setFilterPrompt(''); setFilterModel(''); setFilterVersion(''); setFilterStatus(''); setFilterDateRange('all'); }} className="text-primary hover:underline text-xs">Clear filters</button>
+            <button onClick={() => { setSearchText(''); setFilterPrompt(''); setFilterModel(''); setFilterVersion(''); setFilterStatus(''); setFilterDateRange('all'); }} className="text-xs text-primary hover:underline">Clear filters</button>
           </div>
         )}
       </div>
 
-      {/* Bulk Actions */}
       {selectedRows.size > 0 && (
-        <div className="bg-primary/10 border border-primary/30 rounded-lg p-4 flex items-center justify-between">
-          <span className="text-primary font-medium">{selectedRows.size} selected</span>
+        <div className="flex items-center justify-between rounded-lg border border-primary/30 bg-primary/10 p-4">
+          <span className="font-medium text-primary">{selectedRows.size} selected</span>
           <div className="flex gap-3">
-            <button onClick={handleExportSelected} className="text-primary hover:underline text-sm">Export JSON</button>
-            <button onClick={handleDeleteSelected} className="text-red-400 hover:underline text-sm">Delete</button>
-            <button onClick={() => setSelectedRows(new Set())} className="text-text-muted hover:underline text-sm">Clear</button>
+            <button onClick={handleExportSelected} className="text-sm text-primary hover:underline">Export JSON</button>
+            <button onClick={handleDeleteSelected} className="text-sm text-red-400 hover:underline">Delete</button>
+            <button onClick={() => setSelectedRows(new Set())} className="text-sm text-text-muted hover:underline">Clear</button>
           </div>
         </div>
       )}
 
-      {/* Table */}
       {filteredExperiments.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center text-center">
-          <FlaskConical size={48} className="text-text-muted/50 mb-4" />
-          <p className="text-text-muted mb-4">No experiments yet â€” run a prompt in Prompt Studio to start tracking</p>
+        <div className="flex flex-1 flex-col items-center justify-center text-center">
+          <FlaskConical size={48} className="mb-4 text-text-muted/50" />
+          <p className="mb-4 text-text-muted">No experiments yet — run a prompt in Prompt Studio to start tracking</p>
           <button className="text-primary hover:underline">Go to Prompt Studio</button>
         </div>
       ) : (
-        <div className="flex-1 bg-panel border border-border rounded-lg overflow-hidden flex flex-col">
-          <div className="overflow-x-auto flex-1">
-            <table className="w-full text-left border-collapse">
+        <div className="flex flex-1 flex-col overflow-hidden rounded-lg border border-border bg-panel">
+          <div className="flex-1 overflow-x-auto">
+            <table className="w-full border-collapse text-left">
               <thead>
-                <tr className="border-b border-border bg-background/50 sticky top-0">
+                <tr className="sticky top-0 border-b border-border bg-background/50">
                   <th className="px-4 py-3"><input type="checkbox" checked={selectedRows.size === filteredExperiments.length} onChange={handleSelectAll} /></th>
-                  <th className="px-4 py-3 text-xs font-mono uppercase tracking-wider text-text-muted cursor-pointer hover:text-text-main" onClick={() => handleSort('promptVersion')}>Version <SortIndicator field="promptVersion" /></th>
-                  <th className="px-4 py-3 text-xs font-mono uppercase tracking-wider text-text-muted cursor-pointer hover:text-text-main" onClick={() => handleSort('promptName')}>Prompt <SortIndicator field="promptName" /></th>
-                  <th className="px-4 py-3 text-xs font-mono uppercase tracking-wider text-text-muted cursor-pointer hover:text-text-main" onClick={() => handleSort('provider')}>Model <SortIndicator field="provider" /></th>
-                  <th className="px-4 py-3 text-xs font-mono uppercase tracking-wider text-text-muted cursor-pointer hover:text-text-main" onClick={() => handleSort('latencyMs')}>Latency <SortIndicator field="latencyMs" /></th>
-                  <th className="px-4 py-3 text-xs font-mono uppercase tracking-wider text-text-muted cursor-pointer hover:text-text-main" onClick={() => handleSort('totalTokens')}>Tokens <SortIndicator field="totalTokens" /></th>
-                  <th className="px-4 py-3 text-xs font-mono uppercase tracking-wider text-text-muted cursor-pointer hover:text-text-main" onClick={() => handleSort('costEstimate')}>Cost <SortIndicator field="costEstimate" /></th>
-                  <th className="px-4 py-3 text-xs font-mono uppercase tracking-wider text-text-muted cursor-pointer hover:text-text-main" onClick={() => handleSort('score')}>Score <SortIndicator field="score" /></th>
-                  <th className="px-4 py-3 text-xs font-mono uppercase tracking-wider text-text-muted cursor-pointer hover:text-text-main" onClick={() => handleSort('timestamp')}>Timestamp <SortIndicator field="timestamp" /></th>
-                  <th className="px-4 py-3 text-xs font-mono uppercase tracking-wider text-text-muted">Actions</th>
+                  <th className="cursor-pointer px-4 py-3 font-mono text-xs uppercase tracking-wider text-text-muted hover:text-text-main" onClick={() => handleSort('promptVersion')}>Version <SortIndicator field="promptVersion" /></th>
+                  <th className="cursor-pointer px-4 py-3 font-mono text-xs uppercase tracking-wider text-text-muted hover:text-text-main" onClick={() => handleSort('promptName')}>Prompt <SortIndicator field="promptName" /></th>
+                  <th className="cursor-pointer px-4 py-3 font-mono text-xs uppercase tracking-wider text-text-muted hover:text-text-main" onClick={() => handleSort('provider')}>Model <SortIndicator field="provider" /></th>
+                  <th className="cursor-pointer px-4 py-3 font-mono text-xs uppercase tracking-wider text-text-muted hover:text-text-main" onClick={() => handleSort('latencyMs')}>Latency <SortIndicator field="latencyMs" /></th>
+                  <th className="cursor-pointer px-4 py-3 font-mono text-xs uppercase tracking-wider text-text-muted hover:text-text-main" onClick={() => handleSort('totalTokens')}>Tokens <SortIndicator field="totalTokens" /></th>
+                  <th className="cursor-pointer px-4 py-3 font-mono text-xs uppercase tracking-wider text-text-muted hover:text-text-main" onClick={() => handleSort('costEstimate')}>Cost <SortIndicator field="costEstimate" /></th>
+                  <th className="cursor-pointer px-4 py-3 font-mono text-xs uppercase tracking-wider text-text-muted hover:text-text-main" onClick={() => handleSort('score')}>Score <SortIndicator field="score" /></th>
+                  <th className="cursor-pointer px-4 py-3 font-mono text-xs uppercase tracking-wider text-text-muted hover:text-text-main" onClick={() => handleSort('timestamp')}>Timestamp <SortIndicator field="timestamp" /></th>
+                  <th className="px-4 py-3 font-mono text-xs uppercase tracking-wider text-text-muted">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {filteredExperiments.map(exp => (
-                  <tr
-                    key={exp.id}
-                    className="hover:bg-white/[0.02] transition-colors group cursor-pointer"
-                    onClick={() => setDetailedExperiment(exp)}
-                  >
-                    <td
-                      className="px-4 py-4"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedRows.has(exp.id)}
-                        onChange={() => handleRowSelect(exp.id)}
-                      />
+                {filteredExperiments.map((experiment) => (
+                  <tr key={experiment.id} className="group cursor-pointer transition-colors hover:bg-white/[0.02]" onClick={() => { setDetailedExperiment(experiment); setNotesInput(experiment.notes || ''); }}>
+                    <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" checked={selectedRows.has(experiment.id)} onChange={() => handleRowSelect(experiment.id)} />
                     </td>
                     <td className="px-4 py-4">
                       <div className="flex items-center gap-2">
-                        <span className="text-xs px-2 py-0.5 rounded border bg-white/5 border-border text-text-main">{exp.promptName || 'Unknown Prompt'}</span>
-                        <span className="font-mono text-xs px-2 py-0.5 rounded border bg-primary/10 text-primary border-primary/30">{exp.promptVersion}</span>
+                        <span className="rounded border border-border bg-white/5 px-2 py-0.5 text-xs text-text-main">{experiment.promptName || 'Unknown Prompt'}</span>
+                        <span className="rounded border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-xs text-primary">{experiment.promptVersion}</span>
                       </div>
                     </td>
-                    <td className="px-4 py-4 text-sm truncate">{exp.promptName}</td>
-                    <td className="px-4 py-4 text-sm">{exp.provider}</td>
-                    <td className={`px-4 py-4 font-mono text-xs ${getLatencyColor(exp.latencyMs)}`}>{exp.latencyMs}ms</td>
-                    <td className="px-4 py-4 font-mono text-xs text-primary">{exp.totalTokens}</td>
-                    <td className="px-4 py-4 font-mono text-xs text-green-500/80">{exp.costEstimate}</td>
+                    <td className="truncate px-4 py-4 text-sm">{experiment.promptName}</td>
+                    <td className="px-4 py-4 text-sm">{experiment.provider}</td>
+                    <td className={`px-4 py-4 font-mono text-xs ${getLatencyColor(experiment.latencyMs)}`}>{experiment.latencyMs}ms</td>
+                    <td className="px-4 py-4 font-mono text-xs text-primary">{experiment.totalTokens}</td>
+                    <td className="px-4 py-4 font-mono text-xs text-green-500/80">{experiment.costEstimate}</td>
                     <td className="px-4 py-4">
-                      {exp.score !== null ? (
+                      {experiment.score !== null && experiment.score !== undefined ? (
                         <div className="flex items-center gap-2">
-                          <div className="w-12 h-1.5 bg-background rounded-full overflow-hidden border border-border"><div className="h-full bg-primary" style={{ width: `${exp.score}%` }} /></div>
-                          <span className="font-mono text-xs">{exp.score}</span>
+                          <div className="h-1.5 w-12 overflow-hidden rounded-full border border-border bg-background"><div className="h-full bg-primary" style={{ width: `${experiment.score}%` }} /></div>
+                          <span className="font-mono text-xs">{experiment.score}</span>
                         </div>
                       ) : (
-                        <span className="text-text-muted">â€”</span>
+                        <span className="text-text-muted">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-4 text-xs text-text-muted">{timeAgoShort(exp.timestamp)}</td>
+                    <td className="px-4 py-4 text-xs text-text-muted">{timeAgoShort(experiment.timestamp)}</td>
                     <td className="px-4 py-4">
-                      <div
-                        className="flex items-center gap-2 opacity-0 group-hover:opacity-100"
-                        style={{ transition: 'opacity 150ms' }}
-                      >
+                      <div className="flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            const json = JSON.stringify(exp, null, 2);
-                            const blob = new Blob([json], { type: 'application/json' });
+                            const blob = new Blob([JSON.stringify(experiment, null, 2)], { type: 'application/json' });
                             const url = URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = url;
-                            a.download = `experiment-${exp.id}.json`;
-                            a.click();
+                            const anchor = document.createElement('a');
+                            anchor.href = url;
+                            anchor.download = `experiment-${experiment.id}.json`;
+                            anchor.click();
                             URL.revokeObjectURL(url);
                           }}
-                          style={{
-                            minHeight: '32px',
-                            paddingLeft: '12px',
-                            paddingRight: '12px',
-                            fontSize: '12px',
-                            border: '1px solid #2a2a35',
-                            borderRadius: '4px',
-                            background: 'transparent',
-                            color: '#94a3b8',
-                            cursor: 'pointer',
-                            whiteSpace: 'nowrap'
-                          }}
+                          className="min-h-[32px] whitespace-nowrap rounded border border-[#2a2a35] bg-transparent px-3 text-xs text-slate-400"
                         >
                           Export JSON
                         </button>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleDeleteExperiment(exp.id);
+                            handleDeleteExperiment(experiment.id);
                           }}
-                          style={{
-                            minHeight: '32px',
-                            paddingLeft: '12px',
-                            paddingRight: '12px',
-                            fontSize: '12px',
-                            border: '1px solid rgba(239,68,68,0.35)',
-                            borderRadius: '4px',
-                            background: 'transparent',
-                            color: 'rgb(248,113,113)',
-                            cursor: 'pointer',
-                            whiteSpace: 'nowrap'
-                          }}
-                          onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(239,68,68,0.1)'; }}
-                          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                          className="min-h-[32px] whitespace-nowrap rounded border border-red-500/35 bg-transparent px-3 text-xs text-red-400 transition-colors hover:bg-red-500/10"
                         >
                           Delete
                         </button>
@@ -514,8 +414,95 @@ function ExperimentsView() {
         </div>
       )}
 
-      {renderDetailDrawer()}
+      {detailedExperiment && (
+        <>
+          <div className="fixed inset-0 bg-black/40" style={{ zIndex: 40 }} onClick={() => setDetailedExperiment(null)} />
+          <div className="fixed right-0 top-0 flex h-screen w-full max-w-2xl flex-col overflow-y-auto border-l border-border bg-panel animate-in slide-in-from-right duration-300" style={{ zIndex: 50 }}>
+            <div className="sticky top-0 z-10 flex items-start justify-between border-b border-border bg-panel p-6">
+              <div className="flex items-center gap-3">
+                <span className="rounded border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-xs text-primary">{detailedExperiment.promptVersion}</span>
+                <span className="rounded border border-border bg-white/5 px-2 py-0.5 text-xs text-text-main">{detailedExperiment.promptName || 'Unknown Prompt'}</span>
+                <span className="text-sm text-text-muted">{detailedExperiment.model || detailedExperiment.modelName} · {detailedExperiment.provider}</span>
+              </div>
+              <button onClick={() => setDetailedExperiment(null)} className="text-lg leading-none text-text-muted hover:text-text-main">✕</button>
+            </div>
+
+            <div className="space-y-6 p-6">
+              <Section title="System Prompt"><Panel>{detailedExperiment.systemPrompt}</Panel></Section>
+              <Section title="User Template"><Panel>{detailedExperiment.userTemplate}</Panel></Section>
+
+              {detailedExperiment.variableValues && Object.keys(detailedExperiment.variableValues).length > 0 && (
+                <Section title="Variable Values">
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(detailedExperiment.variableValues).map(([key, value]) => (
+                      <span key={key} className="rounded border border-primary/30 bg-primary/10 px-3 py-1 text-sm font-mono text-primary">
+                        {key} = {String(value)}
+                      </span>
+                    ))}
+                  </div>
+                </Section>
+              )}
+
+              <div className="grid grid-cols-2 gap-4">
+                <Metric label="Latency" value={`${detailedExperiment.latencyMs}ms`} className={getLatencyColor(detailedExperiment.latencyMs)} />
+                <Metric label="Tokens" value={detailedExperiment.totalTokens} className="text-primary" />
+                <Metric label="Cost" value={detailedExperiment.costEstimate} className="text-green-500/80" />
+                <div>
+                  <p className="mb-2 text-xs text-text-muted">Status</p>
+                  <span className={`rounded px-2 py-1 text-sm font-bold ${detailedExperiment.status === 'success' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>{detailedExperiment.status}</span>
+                </div>
+              </div>
+
+              <Section title="Score">
+                <div className="flex items-center gap-4">
+                  <input type="range" min="0" max="100" step="1" value={detailedExperiment.score || 0} onChange={(e) => handleUpdateScore(detailedExperiment.id, parseInt(e.target.value, 10))} className="flex-1" />
+                  <span className="text-lg font-bold text-primary">{detailedExperiment.score ?? '—'}</span>
+                </div>
+              </Section>
+
+              <Section title="Notes">
+                <textarea value={notesInput} onChange={(e) => setNotesInput(e.target.value)} onBlur={() => handleUpdateNotes(detailedExperiment.id, notesInput)} className="w-full resize-none rounded border border-border bg-background p-3 text-text-main focus:border-primary/50 focus:outline-none" rows="4" placeholder="Add notes..." />
+              </Section>
+
+              <Section title="Output">
+                {detailedExperiment.status === 'error' ? (
+                  <div className="rounded border border-red-500/20 bg-red-500/10 p-4">
+                    <p className="font-mono text-sm text-red-300">{detailedExperiment.errorMessage}</p>
+                  </div>
+                ) : (
+                  <Panel>{detailedExperiment.output}</Panel>
+                )}
+              </Section>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
+function Section({ title, children }) {
+  return (
+    <div className="space-y-4">
+      <h3 className="text-sm font-bold uppercase tracking-wider text-primary">{title}</h3>
+      {children}
+    </div>
+  );
+}
+
+function Panel({ children }) {
+  return (
+    <div className="rounded border border-border bg-background p-4 font-mono text-sm text-text-main whitespace-pre-wrap break-words">
+      {children}
+    </div>
+  );
+}
+
+function Metric({ label, value, className }) {
+  return (
+    <div>
+      <p className="mb-2 text-xs text-text-muted">{label}</p>
+      <p className={`text-lg font-bold ${className}`}>{value}</p>
+    </div>
+  );
+}

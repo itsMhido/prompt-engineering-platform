@@ -1,4 +1,3 @@
-import React from 'react';
 import {
   Box, Database, FileText, FlaskConical, Target, Settings2
 } from 'lucide-react';

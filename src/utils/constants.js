@@ -1,5 +1,3 @@
-export const PROMPT_DRAFT_KEY = 'pe_draft';
-
 export const PROVIDER_DEFAULTS = {
   OpenAI: {
     endpoint: 'https://api.openai.com/v1/chat/completions',

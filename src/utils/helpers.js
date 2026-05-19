@@ -1,46 +1,9 @@
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { PROMPT_DRAFT_KEY } from './constants';
 
 // Util for tailwind classes
 export function cn(...inputs) {
   return twMerge(clsx(inputs));
-}
-
-export function readLocalStorageJSON(key, fallback) {
-  try {
-    const data = localStorage.getItem(key);
-    if (!data) return fallback;
-    const parsed = JSON.parse(data);
-    return parsed ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-export function writeLocalStorageJSON(key, value) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function loadPromptDraft() {
-  const draft = readLocalStorageJSON(PROMPT_DRAFT_KEY, null);
-  if (!draft || typeof draft !== 'object' || Array.isArray(draft)) {
-    return null;
-  }
-
-  return {
-    systemPrompt: typeof draft.systemPrompt === 'string' ? draft.systemPrompt : '',
-    userPrompt: typeof draft.userPrompt === 'string' ? draft.userPrompt : '',
-    variables: draft.variables && typeof draft.variables === 'object' && !Array.isArray(draft.variables) ? draft.variables : {},
-    selectedModelId: typeof draft.selectedModelId === 'string' ? draft.selectedModelId : '',
-    activeVersion: typeof draft.activeVersion === 'string' ? draft.activeVersion : '',
-    savedAt: typeof draft.savedAt === 'string' ? draft.savedAt : null
-  };
 }
 
 export function getVariableNames(prompt) {

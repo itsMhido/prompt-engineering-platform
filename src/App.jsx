@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import PromptStudio from './pages/PromptStudio';
@@ -7,22 +7,83 @@ import ModelsPage from './pages/ModelsPage';
 import EvaluationsPage from './pages/EvaluationsPage';
 import DatasetsPage from './pages/DatasetsPage';
 import PromptsPage from './pages/PromptsPage';
-import { migrateIfNeeded, seedPromptsIfEmpty } from './utils/promptStore';
+import { bootstrapApp, getSessionSnapshot, listModels, subscribeToSession } from './utils/api';
 
 export default function App() {
-  migrateIfNeeded();
-  seedPromptsIfEmpty();
-
   const [currentView, setCurrentView] = useState({ page: 'prompts' });
+  const [session, setSession] = useState(getSessionSnapshot());
+  const [activeModelName, setActiveModelName] = useState('');
+  const [status, setStatus] = useState({ loading: true, error: '' });
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const unsubscribe = subscribeToSession((nextSession) => {
+      if (isMounted) {
+        setSession(nextSession);
+      }
+    });
+
+    (async () => {
+      try {
+        await bootstrapApp();
+        const models = await listModels();
+        const activeModel = models.find((model) => model.status === 'active');
+
+        if (!isMounted) {
+          return;
+        }
+
+        setActiveModelName(activeModel?.name || '');
+        setStatus({ loading: false, error: '' });
+      } catch (error) {
+        if (!isMounted) {
+          return;
+        }
+
+        setStatus({
+          loading: false,
+          error: error.message || 'Failed to connect to the backend.'
+        });
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  if (status.loading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <div className="glass-panel rounded-xl px-6 py-5 text-center">
+          <div className="mx-auto mb-3 h-5 w-5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+          <p className="text-sm text-text-main">Connecting to your workspace...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (status.error) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background px-6">
+        <div className="glass-panel max-w-md rounded-xl p-6 text-center">
+          <h1 className="mb-2 text-lg font-bold">Backend connection failed</h1>
+          <p className="text-sm text-text-muted">{status.error}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex h-screen w-full bg-background overflow-hidden text-sm">
+    <div className="flex h-screen w-full overflow-hidden bg-background text-sm">
       <Sidebar currentView={currentView} setCurrentView={setCurrentView} />
 
-      <div className="flex flex-col flex-1 min-w-0">
-        <TopBar />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <TopBar session={session} activeModelName={activeModelName} />
 
-        <main className="flex-1 overflow-hidden relative">
+        <main className="relative flex-1 overflow-hidden">
           {currentView.page === 'prompts' && (
             <PromptsPage onOpenPrompt={(promptId) => setCurrentView({ page: 'studio', promptId })} />
           )}
@@ -36,7 +97,7 @@ export default function App() {
             <PromptsPage onOpenPrompt={(promptId) => setCurrentView({ page: 'studio', promptId })} />
           )}
           {currentView.page === 'experiments' && <ExperimentsPage />}
-          {currentView.page === 'models' && <ModelsPage />}
+          {currentView.page === 'models' && <ModelsPage onModelsChanged={setActiveModelName} />}
           {currentView.page === 'evaluations' && <EvaluationsPage />}
           {currentView.page === 'datasets' && <DatasetsPage />}
         </main>

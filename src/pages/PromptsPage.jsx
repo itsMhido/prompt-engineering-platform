@@ -1,52 +1,36 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FileText, Plus, Search, X } from 'lucide-react';
 import { cn, timeAgo } from '../utils/helpers';
 import {
-  getPrompts,
-  getVersions,
-  getExperiments,
   createPrompt,
   duplicatePrompt,
-  deletePrompt,
-  seedPromptsIfEmpty
-} from '../utils/promptStore';
+  listPrompts,
+  removePrompt
+} from '../utils/api';
 
 export default function PromptsPage({ onOpenPrompt }) {
   const [prompts, setPrompts] = useState([]);
-  const [versions, setVersions] = useState([]);
-  const [experiments, setExperiments] = useState([]);
   const [search, setSearch] = useState('');
   const [activeTag, setActiveTag] = useState('all');
   const [showCreate, setShowCreate] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  const [error, setError] = useState('');
 
-  const refresh = () => {
-    seedPromptsIfEmpty();
-    setPrompts(getPrompts());
-    setVersions(getVersions());
-    setExperiments(getExperiments());
+  const refresh = async () => {
+    const nextPrompts = await listPrompts();
+    setPrompts(nextPrompts);
   };
 
   useEffect(() => {
-    refresh();
+    refresh().catch((err) => setError(err.message || 'Failed to load prompts.'));
   }, []);
 
   const tags = useMemo(() => {
-    return Array.from(new Set(prompts.flatMap(p => Array.isArray(p.tags) ? p.tags : [])));
+    return Array.from(new Set(prompts.flatMap((prompt) => Array.isArray(prompt.tags) ? prompt.tags : [])));
   }, [prompts]);
 
-  const latestVersionByPrompt = useMemo(() => {
-    const map = {};
-    versions.forEach(v => {
-      if (!map[v.promptId] || Number(v.version || 0) > Number(map[v.promptId].version || 0)) {
-        map[v.promptId] = v;
-      }
-    });
-    return map;
-  }, [versions]);
-
   const filteredPrompts = useMemo(() => {
-    return prompts.filter(prompt => {
+    return prompts.filter((prompt) => {
       const haystack = `${prompt.name || ''} ${prompt.description || ''} ${(prompt.tags || []).join(' ')}`.toLowerCase();
       const matchesSearch = !search || haystack.includes(search.toLowerCase());
       const matchesTag = activeTag === 'all' || (prompt.tags || []).includes(activeTag);
@@ -54,76 +38,73 @@ export default function PromptsPage({ onOpenPrompt }) {
     });
   }, [prompts, search, activeTag]);
 
-  const promptStats = useMemo(() => {
-    return prompts.reduce((acc, prompt) => {
-      const promptVersions = versions.filter(v => v.promptId === prompt.id);
-      const promptExperiments = experiments.filter(e => e.promptId === prompt.id);
-      const latestExperiment = promptExperiments[0] || null;
-      acc[prompt.id] = {
-        versions: promptVersions.length,
-        runs: promptExperiments.length,
-        model: latestExperiment?.modelId || latestExperiment?.model || 'No runs'
-      };
-      return acc;
-    }, {});
-  }, [prompts, versions, experiments]);
-
-  if (prompts.length === 0) {
+  if (prompts.length === 0 && !error) {
     return (
-      <div className="h-full flex flex-col items-center justify-center text-center">
-        <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-4">
+      <div className="flex h-full flex-col items-center justify-center text-center">
+        <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10">
           <FileText size={28} className="text-primary" />
         </div>
-        <h2 className="text-2xl font-bold mb-1">No prompts yet</h2>
-        <p className="text-text-muted mb-6">Create your first prompt to start engineering and versioning</p>
+        <h2 className="mb-1 text-2xl font-bold">No prompts yet</h2>
+        <p className="mb-6 text-text-muted">Create your first prompt to start engineering and versioning</p>
         <button
           onClick={() => setShowCreate(true)}
-          className="px-4 py-2 rounded-md bg-primary text-panel font-medium hover:bg-primary/90 transition-colors flex items-center gap-2"
+          className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 font-medium text-panel transition-colors hover:bg-primary/90"
         >
           <Plus size={15} /> New Prompt
         </button>
-        {showCreate && <CreatePromptModal onClose={() => setShowCreate(false)} onCreated={(prompt) => onOpenPrompt(prompt.id)} />}
+        {showCreate && (
+          <CreatePromptModal
+            onClose={() => setShowCreate(false)}
+            onCreated={(prompt) => onOpenPrompt(prompt.id)}
+          />
+        )}
       </div>
     );
   }
 
   return (
-    <div className="p-8 h-full overflow-y-auto animate-in fade-in duration-300">
-      <div className="flex items-start justify-between mb-6">
+    <div className="h-full overflow-y-auto p-8 animate-in fade-in duration-300">
+      <div className="mb-6 flex items-start justify-between">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight mb-1">Prompts</h2>
+          <h2 className="mb-1 text-2xl font-bold tracking-tight">Prompts</h2>
           <p className="text-text-muted">Your prompt library</p>
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="px-4 py-2 rounded-md bg-primary text-panel font-medium hover:bg-primary/90 transition-colors flex items-center gap-2"
+          className="flex items-center gap-2 rounded-md bg-primary px-4 py-2 font-medium text-panel transition-colors hover:bg-primary/90"
         >
           <Plus size={15} /> New Prompt
         </button>
       </div>
 
-      <div className="flex flex-col gap-3 mb-6">
+      {error && (
+        <div className="mb-4 rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          {error}
+        </div>
+      )}
+
+      <div className="mb-6 flex flex-col gap-3">
         <div className="relative w-80">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
           <input
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={(e) => setSearch(e.target.value)}
             placeholder="Search prompts..."
-            className="w-full pl-9 pr-3 py-2 bg-panel border border-border rounded-md text-sm focus:outline-none focus:border-primary/50"
+            className="w-full rounded-md border border-border bg-panel py-2 pl-9 pr-3 text-sm focus:border-primary/50 focus:outline-none"
           />
         </div>
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setActiveTag('all')}
-            className={cn('px-3 py-1 rounded-full text-xs border', activeTag === 'all' ? 'bg-primary/15 text-primary border-primary/40' : 'border-border text-text-muted')}
+            className={cn('rounded-full border px-3 py-1 text-xs', activeTag === 'all' ? 'border-primary/40 bg-primary/15 text-primary' : 'border-border text-text-muted')}
           >
             All
           </button>
-          {tags.map(tag => (
+          {tags.map((tag) => (
             <button
               key={tag}
               onClick={() => setActiveTag(tag)}
-              className={cn('px-3 py-1 rounded-full text-xs border', activeTag === tag ? 'bg-primary/15 text-primary border-primary/40' : 'border-border text-text-muted')}
+              className={cn('rounded-full border px-3 py-1 text-xs', activeTag === tag ? 'border-primary/40 bg-primary/15 text-primary' : 'border-border text-text-muted')}
             >
               {tag}
             </button>
@@ -131,78 +112,90 @@ export default function PromptsPage({ onOpenPrompt }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {filteredPrompts.map(prompt => {
-          const stats = promptStats[prompt.id] || { versions: 0, runs: 0, model: 'No runs' };
-          const latestVersion = latestVersionByPrompt[prompt.id];
-
-          return (
-            <div
-              key={prompt.id}
-              className="glass-panel rounded-lg p-5 group hover:border-primary/40 transition-all cursor-pointer flex flex-col gap-3"
-              onClick={() => onOpenPrompt(prompt.id)}
-            >
-              <div className="flex items-start justify-between">
-                <h3 className="font-semibold text-base leading-tight">{prompt.name}</h3>
-                <span className="text-xs font-mono px-2 py-0.5 rounded border bg-primary/10 text-primary border-primary/30">
-                  {stats.versions} versions
-                </span>
-              </div>
-
-              <p className="text-sm text-text-muted line-clamp-2 min-h-[40px]">{prompt.description || 'No description'}</p>
-
-              <div className="flex flex-wrap gap-1.5">
-                {(prompt.tags || []).map(tag => (
-                  <span key={tag} className="text-xs px-2 py-0.5 rounded-full border border-border text-text-muted">
-                    {tag}
-                  </span>
-                ))}
-              </div>
-
-              <div className="flex items-center justify-between text-xs text-text-muted">
-                <span>{stats.runs} runs</span>
-                <span>{timeAgo(prompt.updatedAt)}</span>
-              </div>
-
-              <div className="text-xs font-mono text-primary/80 truncate">
-                {latestVersion ? `v${latestVersion.version}` : 'No versions'} · {stats.model}
-              </div>
-
-              <div className="flex items-center gap-3 pt-1 border-t border-border opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-                <button onClick={() => onOpenPrompt(prompt.id)} className="text-xs text-primary hover:text-primary/80 font-medium">Open</button>
-                <button
-                  onClick={() => {
-                    duplicatePrompt(prompt.id);
-                    refresh();
-                  }}
-                  className="text-xs text-text-muted hover:text-text-main"
-                >
-                  Duplicate
-                </button>
-                {deletingId === prompt.id ? (
-                  <>
-                    <button
-                      onClick={() => {
-                        deletePrompt(prompt.id);
-                        setDeletingId(null);
-                        refresh();
-                      }}
-                      className="text-xs text-red-400 hover:text-red-300 ml-auto"
-                    >
-                      Confirm
-                    </button>
-                    <button onClick={() => setDeletingId(null)} className="text-xs text-text-muted hover:text-text-main">Cancel</button>
-                  </>
-                ) : (
-                  <button onClick={() => setDeletingId(prompt.id)} className="text-xs text-text-muted hover:text-red-400 ml-auto">Delete</button>
-                )}
-              </div>
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
+        {filteredPrompts.map((prompt) => (
+          <div
+            key={prompt.id}
+            className="glass-panel group flex cursor-pointer flex-col gap-3 rounded-lg p-5 transition-all hover:border-primary/40"
+            onClick={() => onOpenPrompt(prompt.id)}
+          >
+            <div className="flex items-start justify-between">
+              <h3 className="text-base font-semibold leading-tight">{prompt.name}</h3>
+              <span className="rounded border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-xs text-primary">
+                {prompt.versionCount} versions
+              </span>
             </div>
-          );
-        })}
+
+            <p className="min-h-[40px] line-clamp-2 text-sm text-text-muted">{prompt.description || 'No description'}</p>
+
+            <div className="flex flex-wrap gap-1.5">
+              {(prompt.tags || []).map((tag) => (
+                <span key={tag} className="rounded-full border border-border px-2 py-0.5 text-xs text-text-muted">
+                  {tag}
+                </span>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between text-xs text-text-muted">
+              <span>{prompt.experimentCount} runs</span>
+              <span>{timeAgo(prompt.updatedAt)}</span>
+            </div>
+
+            <div className="truncate text-xs font-mono text-primary/80">
+              {prompt.versionCount > 0 ? `v${prompt.versionCount}` : 'No versions'} · {prompt.experimentCount} experiments
+            </div>
+
+            <div className="flex items-center gap-3 border-t border-border pt-1 opacity-0 transition-opacity group-hover:opacity-100" onClick={(e) => e.stopPropagation()}>
+              <button onClick={() => onOpenPrompt(prompt.id)} className="text-xs font-medium text-primary hover:text-primary/80">Open</button>
+              <button
+                onClick={async () => {
+                  try {
+                    const duplicated = await duplicatePrompt(prompt.id);
+                    await refresh();
+                    onOpenPrompt(duplicated.prompt.id);
+                  } catch (err) {
+                    setError(err.message || 'Failed to duplicate prompt.');
+                  }
+                }}
+                className="text-xs text-text-muted hover:text-text-main"
+              >
+                Duplicate
+              </button>
+              {deletingId === prompt.id ? (
+                <>
+                  <button
+                    onClick={async () => {
+                      try {
+                        await removePrompt(prompt.id);
+                        setDeletingId(null);
+                        await refresh();
+                      } catch (err) {
+                        setError(err.message || 'Failed to delete prompt.');
+                      }
+                    }}
+                    className="ml-auto text-xs text-red-400 hover:text-red-300"
+                  >
+                    Confirm
+                  </button>
+                  <button onClick={() => setDeletingId(null)} className="text-xs text-text-muted hover:text-text-main">Cancel</button>
+                </>
+              ) : (
+                <button onClick={() => setDeletingId(prompt.id)} className="ml-auto text-xs text-text-muted hover:text-red-400">Delete</button>
+              )}
+            </div>
+          </div>
+        ))}
       </div>
 
-      {showCreate && <CreatePromptModal onClose={() => setShowCreate(false)} onCreated={(prompt) => onOpenPrompt(prompt.id)} />}
+      {showCreate && (
+        <CreatePromptModal
+          onClose={() => setShowCreate(false)}
+          onCreated={async (prompt) => {
+            await refresh();
+            onOpenPrompt(prompt.id);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -212,55 +205,73 @@ function CreatePromptModal({ onClose, onCreated }) {
   const [description, setDescription] = useState('');
   const [tagInput, setTagInput] = useState('');
   const [tags, setTags] = useState([]);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    const onEsc = (e) => e.key === 'Escape' && onClose();
+    const onEsc = (event) => event.key === 'Escape' && onClose();
     window.addEventListener('keydown', onEsc);
     return () => window.removeEventListener('keydown', onEsc);
   }, [onClose]);
 
   const addTag = () => {
     const tag = tagInput.trim();
-    if (!tag || tags.includes(tag)) return;
-    setTags(prev => [...prev, tag]);
+    if (!tag || tags.includes(tag)) {
+      return;
+    }
+
+    setTags((prev) => [...prev, tag]);
     setTagInput('');
   };
 
+  const handleCreate = async () => {
+    try {
+      const created = await createPrompt({ name: name.trim(), description, tags });
+      onCreated(created.prompt);
+    } catch (err) {
+      setError(err.message || 'Failed to create prompt.');
+    }
+  };
+
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4" onClick={onClose}>
-      <div className="bg-panel border border-border rounded-xl w-full max-w-lg p-6" onClick={e => e.stopPropagation()}>
-        <h3 className="text-lg font-bold mb-4">New Prompt</h3>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-xl border border-border bg-panel p-6" onClick={(e) => e.stopPropagation()}>
+        <h3 className="mb-4 text-lg font-bold">New Prompt</h3>
+        {error && (
+          <div className="mb-4 rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            {error}
+          </div>
+        )}
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1.5">Name</label>
-            <input value={name} onChange={e => setName(e.target.value)} className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-primary/50" />
+            <label className="mb-1.5 block text-sm font-medium">Name</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded border border-border bg-background px-3 py-2 text-sm focus:border-primary/50 focus:outline-none" />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1.5">Description</label>
-            <textarea value={description} onChange={e => setDescription(e.target.value)} rows={3} className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-primary/50 resize-none" />
+            <label className="mb-1.5 block text-sm font-medium">Description</label>
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} className="w-full resize-none rounded border border-border bg-background px-3 py-2 text-sm focus:border-primary/50 focus:outline-none" />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1.5">Tags</label>
+            <label className="mb-1.5 block text-sm font-medium">Tags</label>
             <div className="flex gap-2">
               <input
                 value={tagInput}
-                onChange={e => setTagInput(e.target.value)}
-                onKeyDown={e => {
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
                     addTag();
                   }
                 }}
-                className="flex-1 bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:border-primary/50"
+                className="flex-1 rounded border border-border bg-background px-3 py-2 text-sm focus:border-primary/50 focus:outline-none"
                 placeholder="Type a tag and press Enter"
               />
-              <button onClick={addTag} className="px-3 py-2 border border-border rounded text-sm text-text-muted hover:text-text-main">Add</button>
+              <button onClick={addTag} className="rounded border border-border px-3 py-2 text-sm text-text-muted hover:text-text-main">Add</button>
             </div>
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {tags.map(tag => (
-                <span key={tag} className="text-xs px-2 py-0.5 rounded-full border border-border text-text-muted flex items-center gap-1">
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {tags.map((tag) => (
+                <span key={tag} className="flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs text-text-muted">
                   {tag}
-                  <button onClick={() => setTags(prev => prev.filter(t => t !== tag))}>
+                  <button onClick={() => setTags((prev) => prev.filter((item) => item !== tag))}>
                     <X size={11} />
                   </button>
                 </span>
@@ -268,16 +279,9 @@ function CreatePromptModal({ onClose, onCreated }) {
             </div>
           </div>
         </div>
-        <div className="flex justify-end gap-3 mt-6">
+        <div className="mt-6 flex justify-end gap-3">
           <button onClick={onClose} className="px-4 py-2 text-sm text-text-muted hover:text-text-main">Cancel</button>
-          <button
-            disabled={!name.trim()}
-            onClick={() => {
-              const prompt = createPrompt({ name: name.trim(), description, tags });
-              onCreated(prompt);
-            }}
-            className="px-4 py-2 text-sm bg-primary text-panel rounded hover:bg-primary/90 disabled:opacity-40"
-          >
+          <button disabled={!name.trim()} onClick={handleCreate} className="rounded bg-primary px-4 py-2 text-sm text-panel hover:bg-primary/90 disabled:opacity-40">
             Create Prompt
           </button>
         </div>
