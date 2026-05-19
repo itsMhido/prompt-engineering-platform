@@ -57,7 +57,7 @@ function buildGroupedScores(experiments, key) {
     Relevance: group.counts.Relevance > 0 ? (group.Relevance / group.counts.Relevance).toFixed(1) : '0.0',
     Correctness: group.counts.Correctness > 0 ? (group.Correctness / group.counts.Correctness).toFixed(1) : '0.0',
     Toxicity: group.counts.Toxicity > 0 ? (group.Toxicity / group.counts.Toxicity).toFixed(1) : '0.0',
-    Overall: (group.Overall / group.runs).toFixed(1)
+    Overall: group.runs > 0 && group.Overall != null ? (group.Overall / group.runs).toFixed(1) : '0.0'
   })).sort((left, right) => parseFloat(right.Overall) - parseFloat(left.Overall));
 }
 
@@ -149,6 +149,7 @@ export default function EvaluationsPage() {
         ) : (
           <BatchEvalView
             experiments={experiments}
+            setExperiments={setExperiments}
             datasets={datasets}
             models={models}
             prompts={prompts}
@@ -202,10 +203,10 @@ function OverviewView({ experiments, setActiveTab }) {
 
     return {
       totalEvaluated: scoredExperiments.length,
-      avgRelevance: (averages.Relevance / (scoredExperiments.filter((experiment) => experiment.scores.Relevance !== undefined).length || 1)).toFixed(1),
-      avgCorrectness: (averages.Correctness / (scoredExperiments.filter((experiment) => experiment.scores.Correctness !== undefined).length || 1)).toFixed(1),
-      avgToxicity: (averages.Toxicity / (scoredExperiments.filter((experiment) => experiment.scores.Toxicity !== undefined).length || 1)).toFixed(1),
-      avgOverall: (averages.Overall / scoredExperiments.length).toFixed(1)
+      avgRelevance: averages.Relevance != null ? (averages.Relevance / (scoredExperiments.filter((experiment) => experiment.scores.Relevance !== undefined).length || 1)).toFixed(1) : '0.0',
+      avgCorrectness: averages.Correctness != null ? (averages.Correctness / (scoredExperiments.filter((experiment) => experiment.scores.Correctness !== undefined).length || 1)).toFixed(1) : '0.0',
+      avgToxicity: averages.Toxicity != null ? (averages.Toxicity / (scoredExperiments.filter((experiment) => experiment.scores.Toxicity !== undefined).length || 1)).toFixed(1) : '0.0',
+      avgOverall: averages.Overall != null && scoredExperiments.length > 0 ? (averages.Overall / scoredExperiments.length).toFixed(1) : '0.0'
     };
   }, [scoredExperiments]);
 
@@ -384,7 +385,7 @@ function Selector({ label, value, onChange, experiments }) {
   );
 }
 
-function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDetail, onExperimentsAdded, onUpdateExperiment }) {
+function BatchEvalView({ experiments, setExperiments, datasets, models, prompts, fetchDatasetDetail, onExperimentsAdded, onUpdateExperiment }) {
   const [viewMode, setViewMode] = useState('existing');
   const [selectedDatasetId, setSelectedDatasetId] = useState('all');
   const [selectedVersion, setSelectedVersion] = useState('all');
@@ -477,11 +478,11 @@ function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDet
     });
 
     return {
-      Relevance: (totals.Relevance / (scoredExperiments.filter((experiment) => experiment.scores.Relevance !== undefined).length || 1)).toFixed(1),
-      Correctness: (totals.Correctness / (scoredExperiments.filter((experiment) => experiment.scores.Correctness !== undefined).length || 1)).toFixed(1),
-      Toxicity: (totals.Toxicity / (scoredExperiments.filter((experiment) => experiment.scores.Toxicity !== undefined).length || 1)).toFixed(1),
-      Fluency: (totals.Fluency / (scoredExperiments.filter((experiment) => experiment.scores.Fluency !== undefined).length || 1)).toFixed(1),
-      Overall: (totals.Overall / scoredExperiments.length).toFixed(1),
+      Relevance: totals.Relevance != null ? (totals.Relevance / (scoredExperiments.filter((experiment) => experiment.scores.Relevance !== undefined).length || 1)).toFixed(1) : '0.0',
+      Correctness: totals.Correctness != null ? (totals.Correctness / (scoredExperiments.filter((experiment) => experiment.scores.Correctness !== undefined).length || 1)).toFixed(1) : '0.0',
+      Toxicity: totals.Toxicity != null ? (totals.Toxicity / (scoredExperiments.filter((experiment) => experiment.scores.Toxicity !== undefined).length || 1)).toFixed(1) : '0.0',
+      Fluency: totals.Fluency != null ? (totals.Fluency / (scoredExperiments.filter((experiment) => experiment.scores.Fluency !== undefined).length || 1)).toFixed(1) : '0.0',
+      Overall: totals.Overall != null && scoredExperiments.length > 0 ? (totals.Overall / scoredExperiments.length).toFixed(1) : '0.0',
       scoredCount: scoredExperiments.length,
       totalCount: datasetExps.length
     };
@@ -635,9 +636,9 @@ function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDet
               </div>
 
               <div className="pt-4">
-                <button 
-                  onClick={handleRunNewBatch} 
-                  disabled={!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId || isRunningBatch} 
+                <button
+                  onClick={handleRunNewBatch}
+                  disabled={!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId || isRunningBatch}
                   className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-4 font-black uppercase tracking-[0.2em] text-panel shadow-lg shadow-primary/20 transition-all hover:bg-primary/90"
                   style={{ opacity: isRunningBatch ? 0.6 : (!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId ? 0.3 : 1), cursor: isRunningBatch ? 'not-allowed' : (!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId ? 'not-allowed' : 'pointer') }}
                 >
@@ -657,11 +658,51 @@ function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDet
         <>
           <div className="mb-6 space-y-6 shrink-0">
             <div className="flex items-end justify-between">
-              <div className="flex gap-4">
-                <FilterField label="Dataset" value={selectedDatasetId} onChange={setSelectedDatasetId} options={[{ value: 'all', label: 'All Datasets' }, ...datasets.filter((dataset) => experiments.some((experiment) => experiment.datasetId === dataset.id)).map((dataset) => ({ value: dataset.id, label: dataset.name }))]} />
-                <FilterField label="Version" value={selectedVersion} onChange={setSelectedVersion} options={[{ value: 'all', label: 'All Versions' }, ...uniqueVersions.map((version) => ({ value: version, label: version }))]} />
+              <div style={{ marginBottom: 16, flex: 1 }}>
+                <label style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, display: 'block', fontWeight: 'bold', letterSpacing: '0.1em' }}>
+                  BATCH RUN
+                </label>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {batches.map(batch => (
+                    <button
+                      key={batch.batchId}
+                      onClick={() => setSelectedBatchId(batch.batchId)}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: 6,
+                        border: selectedBatchId === batch.batchId
+                          ? '1px solid #88d273'
+                          : '1px solid var(--border)',
+                        background: selectedBatchId === batch.batchId
+                          ? 'rgba(136, 210, 115, 0.1)'
+                          : 'transparent',
+                        color: selectedBatchId === batch.batchId ? '#88d273' : 'var(--text-muted)',
+                        cursor: 'pointer',
+                        fontSize: 12
+                      }}
+                    >
+                      <span>{batch.batchName}</span>
+                      <span style={{ marginLeft: 8, opacity: 0.6 }}>
+                        {batch.successCount}/{batch.rowCount} rows
+                      </span>
+                      <span style={{ marginLeft: 8, opacity: 0.5, fontSize: 11 }}>
+                        {timeAgo(batch.createdAt)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                {batches.length === 0 && (
+                  <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 8 }}>
+                    No batch runs yet — run a batch from the "Run New Batch" tab first.
+                  </p>
+                )}
               </div>
-              <button onClick={() => setIsAIScoringOpen(true)} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-bold text-panel shadow-lg shadow-primary/10 transition-all hover:bg-primary/90">
+              <button 
+                onClick={() => setIsAIScoringOpen(true)} 
+                disabled={!selectedBatchId || batches.length === 0}
+                className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-bold text-panel shadow-lg shadow-primary/10 transition-all hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed mb-4"
+              >
                 <Zap size={16} fill="currentColor" /> Score All with AI
               </button>
             </div>
@@ -719,9 +760,16 @@ function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDet
                 </tr>
               </thead>
               <tbody>
-                {datasetExps.map((experiment, index) => {
+                {!selectedBatchId && batches.length > 0 && (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-12 text-center text-sm text-text-muted italic">
+                      Select a batch run above to view its results
+                    </td>
+                  </tr>
+                )}
+                {selectedBatchId && datasetExps.map((experiment, index) => {
                   const isExpanded = expandedRows.has(experiment.id);
-                  const rowOverall = METRICS.reduce((sum, metric) => sum + (experiment.scores?.[metric] || 0), 0) / METRICS.length;
+                  const rowOverall = getOverall(experiment);
                   const hasScores = experiment.scores && Object.keys(experiment.scores).length > 0;
 
                   return (
@@ -755,13 +803,13 @@ function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDet
                           </td>
                         ))}
                         <td className="px-4 py-4">
-                          {hasScores ? (
+                          {hasScores && rowOverall != null ? (
                             <div className="flex items-center gap-3">
                               <div className="h-1.5 flex-1 overflow-hidden rounded-full border border-border/50 bg-background">
-                                <div className="h-full bg-primary transition-all" style={{ width: `${experiment.score}%` }} />
+                                <div className="h-full bg-primary transition-all" style={{ width: `${rowOverall}%` }} />
                               </div>
                               <span className="w-8 text-right font-mono text-[10px] font-bold text-text-main">
-                                {experiment.score.toFixed(0)}%
+                                {rowOverall.toFixed(0)}%
                               </span>
                             </div>
                           ) : (
@@ -819,11 +867,11 @@ function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDet
       )}
 
       {isAIScoringOpen && (
-        <AIScoringModal 
-          dataset={datasets.find((dataset) => dataset.id === selectedDatasetId)} 
+        <AIScoringModal
+          dataset={datasets.find((dataset) => dataset.id === selectedDatasetId)}
           activeModels={models.filter(m => m.status === 'active')}
-          onCancel={() => setIsAIScoringOpen(false)} 
-          onConfirm={handleRunAIScoring} 
+          onCancel={() => setIsAIScoringOpen(false)}
+          onConfirm={handleRunAIScoring}
         />
       )}
     </div>
