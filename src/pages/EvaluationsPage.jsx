@@ -525,7 +525,7 @@ function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDet
     }
   };
 
-  const handleRunAIScoring = async ({ metrics, expectedOutputCol }) => {
+  const handleRunAIScoring = async ({ metrics, expectedOutputCol, scorerModelId }) => {
     setIsAIScoringOpen(false);
 
     const unscored = datasetExps.filter((experiment) => !metrics.every((metric) => experiment.scores?.[metric] !== undefined));
@@ -550,15 +550,20 @@ function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDet
         const result = await scoreEvaluation({
           experimentId: experiment.id,
           metrics,
-          expectedOutput
+          expectedOutput,
+          scorerModelId
         });
 
         if (result.updatedExperiment) {
-          await onUpdateExperiment(result.updatedExperiment);
+          setExperiments((prev) => prev.map((e) => e.id === experiment.id ? result.updatedExperiment : e));
+          console.log(`Row scored by ${result.scorerModelName}`);
         }
-      } catch {
+      } catch (err) {
+        console.error(`Failed to score experiment ${experiment.id}:`, err);
         // Keep the run moving if one item fails to score.
       }
+
+      await new Promise(r => setTimeout(r, 300));
     }
 
     setScoringProgress(null);
@@ -689,10 +694,11 @@ function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDet
           </div>
 
           {scoringProgress && (
-            <div className="mb-6 flex items-center justify-between rounded-lg border border-primary/30 bg-primary/10 p-3 shrink-0 animate-pulse">
+            <div className="mb-6 flex items-center justify-between rounded-lg border border-primary/30 bg-primary/10 p-3 shrink-0">
               <div className="flex items-center gap-3">
                 <div className="h-5 w-5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
-                <span className="text-sm font-medium text-primary">AI Scoring in progress: {scoringProgress.current} of {scoringProgress.total}...</span>
+                <span className="text-sm font-medium text-primary">⚡ Scoring {scoringProgress.current} of {scoringProgress.total} with AI...</span>
+                <span className="text-xs text-text-muted ml-2">Scores appear as each row completes</span>
               </div>
             </div>
           )}
@@ -743,20 +749,24 @@ function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDet
                         </td>
                         {METRICS.slice(0, 2).map((metric) => (
                           <td key={metric} className="px-4 py-4 text-center">
-                            <span className={cn('font-mono text-xs font-bold', experiment.scores?.[metric] ? (experiment.scores[metric] > 80 ? 'text-primary' : 'text-text-main') : 'text-text-muted opacity-30')}>
+                            <span className={cn('font-mono text-xs font-bold', experiment.scores?.[metric] ? (experiment.scores[metric] > 80 ? 'text-primary' : experiment.scores[metric] > 40 ? 'text-amber-500' : 'text-red-500') : 'text-text-muted opacity-30')}>
                               {experiment.scores?.[metric] ?? '--'}
                             </span>
                           </td>
                         ))}
                         <td className="px-4 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="h-1.5 flex-1 overflow-hidden rounded-full border border-border/50 bg-background">
-                              <div className={cn('h-full transition-all', hasScores ? 'bg-primary' : 'opacity-0')} style={{ width: `${rowOverall}%` }} />
+                          {hasScores ? (
+                            <div className="flex items-center gap-3">
+                              <div className="h-1.5 flex-1 overflow-hidden rounded-full border border-border/50 bg-background">
+                                <div className="h-full bg-primary transition-all" style={{ width: `${experiment.score}%` }} />
+                              </div>
+                              <span className="w-8 text-right font-mono text-[10px] font-bold text-text-main">
+                                {experiment.score.toFixed(0)}%
+                              </span>
                             </div>
-                            <span className={cn('w-8 text-right font-mono text-[10px] font-bold', hasScores ? 'text-text-main' : 'text-text-muted opacity-30')}>
-                              {hasScores ? `${rowOverall.toFixed(0)}%` : '--'}
-                            </span>
-                          </div>
+                          ) : (
+                            <div className="text-center font-mono text-[10px] text-text-muted opacity-30">--</div>
+                          )}
                         </td>
                         <td className="px-4 py-4 text-center">
                           <span className={cn('rounded-full border px-2 py-0.5 text-[9px] font-black uppercase tracking-tighter', experiment.status === 'success' ? 'border-primary/30 bg-primary/10 text-primary' : 'border-red-500/30 bg-red-500/10 text-red-400')}>
@@ -809,7 +819,12 @@ function BatchEvalView({ experiments, datasets, models, prompts, fetchDatasetDet
       )}
 
       {isAIScoringOpen && (
-        <AIScoringModal dataset={datasets.find((dataset) => dataset.id === selectedDatasetId)} onCancel={() => setIsAIScoringOpen(false)} onConfirm={handleRunAIScoring} />
+        <AIScoringModal 
+          dataset={datasets.find((dataset) => dataset.id === selectedDatasetId)} 
+          activeModels={models.filter(m => m.status === 'active')}
+          onCancel={() => setIsAIScoringOpen(false)} 
+          onConfirm={handleRunAIScoring} 
+        />
       )}
     </div>
   );
@@ -850,9 +865,10 @@ function FilterField({ label, value, onChange, options }) {
   );
 }
 
-function AIScoringModal({ dataset, onCancel, onConfirm }) {
+function AIScoringModal({ dataset, activeModels, onCancel, onConfirm }) {
   const [selectedMetrics, setSelectedMetrics] = useState(['Relevance', 'Correctness']);
   const [expectedOutputCol, setExpectedOutputCol] = useState('');
+  const [scorerModelId, setScorerModelId] = useState('');
 
   const toggleMetric = (metric) => {
     setSelectedMetrics((prev) => prev.includes(metric) ? prev.filter((value) => value !== metric) : [...prev, metric]);
@@ -869,6 +885,26 @@ function AIScoringModal({ dataset, onCancel, onConfirm }) {
         </div>
 
         <div className="space-y-6">
+          <div>
+            <label className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-text-muted">SCORER MODEL *</label>
+            <select
+              value={scorerModelId}
+              onChange={e => setScorerModelId(e.target.value)}
+              className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm text-text-main focus:border-primary focus:outline-none"
+            >
+              <option value="">Select a model to use for scoring...</option>
+              {activeModels.map(model => (
+                <option key={model.id} value={model.id}>
+                  {model.name} · {model.provider}
+                </option>
+              ))}
+            </select>
+            <p className="mt-2 flex items-start gap-1.5 text-[10px] text-text-muted">
+              <Info size={12} className="shrink-0" />
+              This model will evaluate each output. Any model with a valid API key works.
+            </p>
+          </div>
+
           <div>
             <label className="mb-3 block text-[10px] font-bold uppercase tracking-widest text-text-muted">Select Metrics to Score</label>
             <div className="grid grid-cols-2 gap-3">
@@ -898,7 +934,7 @@ function AIScoringModal({ dataset, onCancel, onConfirm }) {
 
         <div className="mt-8 flex gap-3">
           <button onClick={onCancel} className="flex-1 py-2.5 text-sm font-bold text-text-muted transition-colors hover:text-text-main">Cancel</button>
-          <button onClick={() => onConfirm({ metrics: selectedMetrics, expectedOutputCol })} disabled={selectedMetrics.length === 0} className="flex-1 rounded-lg bg-primary py-2.5 font-bold text-panel transition-all hover:bg-primary/90 disabled:opacity-50">
+          <button onClick={() => onConfirm({ metrics: selectedMetrics, expectedOutputCol, scorerModelId })} disabled={selectedMetrics.length === 0 || !scorerModelId} className="flex-1 rounded-lg bg-primary py-2.5 font-bold text-panel transition-all hover:bg-primary/90 disabled:opacity-50">
             Run AI Scoring
           </button>
         </div>

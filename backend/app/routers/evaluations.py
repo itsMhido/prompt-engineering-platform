@@ -58,12 +58,14 @@ Respond ONLY with a valid JSON object, no other text:
 
 def parse_score_response(text: str) -> dict:
     """Parse AI scoring response defensively, stripping markdown if present"""
+    text = re.sub(r'```json|```', '', text).strip()
     try:
-        # Strip markdown fences if present
-        text = re.sub(r'```json|```', '', text).strip()
-        return json.loads(text)
-    except:
-        return {"score": 0, "reasoning": "Failed to parse score"}
+        parsed = json.loads(text)
+        score = max(0, min(100, int(parsed.get("score", 0))))
+        reasoning = str(parsed.get("reasoning", "No reasoning provided"))
+        return {"score": score, "reasoning": reasoning}
+    except Exception:
+        return {"score": 0, "reasoning": "Failed to parse score response"}
 
 
 @router.post("/score")
@@ -84,26 +86,19 @@ async def score_evaluation(
         raise HTTPException(status_code=404, detail="Experiment not found")
     
     # 2. Load scorer model
-    scorer_model = None
-    if request.scorerModelId:
-        scorer_model = db.query(DBModel).filter(
-            DBModel.id == request.scorerModelId,
-            DBModel.workspace_id == workspace.id
-        ).first()
-        if not scorer_model:
-            raise HTTPException(status_code=404, detail="Scorer model not found")
-    else:
-        # Find any active Anthropic model in the workspace
-        scorer_model = db.query(DBModel).filter(
-            DBModel.workspace_id == workspace.id,
-            DBModel.provider == "Anthropic",
-            DBModel.status == "active"
-        ).first()
-        if not scorer_model:
-            raise HTTPException(
-                status_code=400,
-                detail="No scorer model available. Please provide scorerModelId or add an active Anthropic model to your workspace."
-            )
+    if not request.scorerModelId:
+        raise HTTPException(
+            status_code=400,
+            detail="scorerModelId is required. Choose which model will evaluate this output."
+        )
+
+    scorer_model = db.query(DBModel).filter(
+        DBModel.id == request.scorerModelId,
+        DBModel.workspace_id == workspace.id,
+        DBModel.status == "active"
+    ).first()
+    if not scorer_model:
+        raise HTTPException(status_code=404, detail="Scorer model not found or inactive")
     
     # 3. Score each metric
     scores = {}
@@ -116,30 +111,37 @@ async def score_evaluation(
         
         scoring_prompt = SCORING_PROMPT.format(
             metric=metric,
-            interpolated_prompt=experiment.interpolated_prompt or "",
+            interpolated_prompt=experiment.interpolated_prompt or experiment.user_template or "",
             output=experiment.output or "",
             expected_line=expected_line
         )
         
         # 4. Call scorer model
-        system_prompt = "You are an objective AI evaluation assistant. Respond only in JSON."
-        result = await call_provider(scorer_model, system_prompt, scoring_prompt)
-        
-        # 5. Parse response
-        if result["status"] == "error":
+        system_prompt = "You are an objective AI evaluation assistant. Respond only in valid JSON."
+        try:
+            result = await call_provider(scorer_model, system_prompt, scoring_prompt)
+            if result["status"] == "error":
+                scores[metric] = 0
+                reasoning[metric] = "Failed to score (error calling model)"
+            else:
+                parsed = parse_score_response(result.get("output", "") or "")
+                scores[metric] = parsed.get("score", 0)
+                reasoning[metric] = parsed.get("reasoning", "No reasoning provided")
+        except Exception as e:
             scores[metric] = 0
-            reasoning[metric] = "Failed to score (error calling model)"
-        else:
-            parsed = parse_score_response(result["output"])
-            scores[metric] = parsed.get("score", 0)
-            reasoning[metric] = parsed.get("reasoning", "")
+            reasoning[metric] = f"Scoring failed: {str(e)}"
     
     # 6. Update experiment with scores
     experiment.scores = scores
     experiment.reasoning = reasoning
-    # Calculate overall score as average
-    if scores:
-        experiment.score = sum(scores.values()) / len(scores)
+    
+    # Calculate overall score as average (excluding Toxicity)
+    scoreable = {k: v for k, v in scores.items() if k != "Toxicity"}
+    if scoreable:
+        experiment.score = round(sum(scoreable.values()) / len(scoreable), 1)
+    else:
+        experiment.score = 0.0
+        
     db.commit()
     db.refresh(experiment)
     
@@ -147,6 +149,8 @@ async def score_evaluation(
     return {
         "scores": scores,
         "reasoning": reasoning,
+        "scorerModelId": str(scorer_model.id),
+        "scorerModelName": scorer_model.name,
         "updatedExperiment": experiment_to_dict(experiment)
     }
 
