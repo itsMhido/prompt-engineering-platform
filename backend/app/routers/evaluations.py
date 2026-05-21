@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 from typing import Optional, Union
+from uuid import uuid4
 
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -201,6 +202,8 @@ async def batch_run_evaluation(
     # 3. Apply row limit
     limit = len(all_rows) if request.rowLimit == "all" else int(request.rowLimit)
     rows_to_process = all_rows[:limit]
+    batch_id = str(uuid4())
+    batch_name = f"{prompt.name} / {dataset.name} / {model.name}"
     
     # 4. Process each row sequentially
     experiments = []
@@ -234,6 +237,8 @@ async def batch_run_evaluation(
                 prompt_version_id=version.id,
                 dataset_id=dataset.id,
                 dataset_row_index=i,
+                batch_id=batch_id,
+                batch_name=batch_name,
                 prompt_name=prompt.name,
                 prompt_version=f"v{version.version_number}",
                 model_name=model.name,

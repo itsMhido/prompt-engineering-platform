@@ -21,6 +21,8 @@ class ExperimentCreate(APIModel):
     model_id: UUID | None = None
     dataset_id: UUID | None = None
     dataset_row_index: int | None = None
+    batch_id: str | None = None
+    batch_name: str | None = None
     prompt_name: str | None = None
     prompt_version: str | None = None
     model_name: str | None = None

@@ -393,6 +393,7 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
   const [batches, setBatches] = useState([]);
   const [selectedBatchId, setSelectedBatchId] = useState(null);
   const [batchExperiments, setBatchExperiments] = useState([]);
+  const [isBatchesLoading, setIsBatchesLoading] = useState(true);
   const [isBatchLoading, setIsBatchLoading] = useState(false);
   
   // Other state
@@ -412,12 +413,15 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
 
   // Load batches on mount
   useEffect(() => {
-    listBatches().then((result) => {
-      setBatches(result);
-      if (result.length > 0 && !selectedBatchId) {
-        setSelectedBatchId(result[0].batchId);
-      }
-    }).catch(() => setBatches([]));
+    listBatches()
+      .then((result) => {
+        setBatches(result);
+        if (result.length > 0 && !selectedBatchId) {
+          setSelectedBatchId(result[0].batchId);
+        }
+      })
+      .catch(() => setBatches([]))
+      .finally(() => setIsBatchesLoading(false));
   }, []);
 
   // Load experiments for selected batch
@@ -603,7 +607,7 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
     setScoringProgress(null);
   };
 
-  if (experiments.length === 0 && viewMode === 'existing') {
+  if (viewMode === 'existing' && !isBatchesLoading && batches.length === 0 && experiments.length === 0) {
     return <EvalEmptyState />;
   }
 
@@ -799,6 +803,13 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
                   <tr>
                     <td colSpan={8} className="px-4 py-12 text-center text-sm text-text-muted italic">
                       Select a batch run above to view its results
+                    </td>
+                  </tr>
+                )}
+                {selectedBatchId && !isBatchLoading && datasetExps.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-12 text-center text-sm text-text-muted italic">
+                      No experiments found for this run.
                     </td>
                   </tr>
                 )}

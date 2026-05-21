@@ -17,6 +17,8 @@ class Experiment(Base):
     model_id = Column(UUID(as_uuid=True), ForeignKey("models.id"), nullable=True)
     dataset_id = Column(UUID(as_uuid=True), ForeignKey("datasets.id"), nullable=True)
     dataset_row_index = Column(Integer, nullable=True)
+    batch_id = Column(Text, nullable=True, index=True)
+    batch_name = Column(Text, nullable=True)
     prompt_name = Column(Text, nullable=True)
     prompt_version = Column(Text, nullable=True)
     model_name = Column(Text, nullable=True)

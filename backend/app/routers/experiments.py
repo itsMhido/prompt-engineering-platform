@@ -30,6 +30,8 @@ def format_experiment(exp: Experiment) -> dict:
         "modelId": str(exp.model_id) if exp.model_id else None,
         "datasetId": str(exp.dataset_id) if exp.dataset_id else None,
         "datasetRowIndex": exp.dataset_row_index,
+        "batchId": exp.batch_id,
+        "batchName": exp.batch_name,
         "promptName": exp.prompt_name,
         "promptVersion": exp.prompt_version,
         "modelName": exp.model_name,
@@ -118,6 +120,7 @@ def get_batches(
             "createdAt": ungrouped_latest.isoformat() if ungrouped_latest else None
         })
 
+    result.sort(key=lambda batch: batch["createdAt"] or "", reverse=True)
     return { "batches": result }
 
 @router.get("")
