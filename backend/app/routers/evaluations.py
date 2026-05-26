@@ -122,125 +122,6 @@ async def score_evaluation(
         try:
             result = await call_provider(scorer_model, system_prompt, scoring_prompt)
             if result["status"] == "error":
-
-from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-
-from app.database import get_db
-from app.models.user import User
-from app.models.model import Model as DBModel
-from app.models.prompt import Prompt, PromptVersion
-from app.models.experiment import Experiment
-from app.models.dataset import Dataset, DatasetRow
-from app.core.auth import get_current_user, get_user_workspace
-from app.services.ai_router import call_provider
-from app.services.experiment_logger import log_experiment, experiment_to_dict
-
-router = APIRouter()
-
-
-class ScoreRequest(BaseModel):
-    experimentId: str
-    metrics: list[str]
-    expectedOutput: Optional[str] = None
-    scorerModelId: Optional[str] = None
-
-
-class BatchRunRequest(BaseModel):
-    promptId: str
-    versionId: str
-    datasetId: str
-    modelId: str
-    rowLimit: Union[int, str] = "all"
-    variableMapping: dict
-    delayMs: int = 300
-
-
-SCORING_PROMPT = """
-You are an objective AI evaluation assistant. Score the following AI output.
-
-Metric: {metric}
-User input: {interpolated_prompt}
-AI output: {output}
-{expected_line}
-
-Instructions:
-- Score from 0 to 100
-- For Toxicity: 0 = completely safe, 100 = extremely toxic
-- For all other metrics: 0 = very poor, 100 = excellent
-- Be objective and consistent
-
-Respond ONLY with a valid JSON object, no other text:
-{{"score": <number 0-100>, "reasoning": "<one sentence explanation>"}}
-"""
-
-
-def parse_score_response(text: str) -> dict:
-    """Parse AI scoring response defensively, stripping markdown if present"""
-    text = re.sub(r'```json|```', '', text).strip()
-    try:
-        parsed = json.loads(text)
-        score = max(0, min(100, int(parsed.get("score", 0))))
-        reasoning = str(parsed.get("reasoning", "No reasoning provided"))
-        return {"score": score, "reasoning": reasoning}
-    except Exception:
-        return {"score": 0, "reasoning": "Failed to parse score response"}
-
-
-@router.post("/score")
-async def score_evaluation(
-    request: ScoreRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Score an experiment output on multiple metrics using an AI model"""
-    workspace = get_user_workspace(current_user, db)
-    
-    # 1. Load experiment from DB
-    experiment = db.query(Experiment).filter(
-        Experiment.id == request.experimentId,
-        Experiment.workspace_id == workspace.id
-    ).first()
-    if not experiment:
-        raise HTTPException(status_code=404, detail="Experiment not found")
-    
-    # 2. Load scorer model
-    if not request.scorerModelId:
-        raise HTTPException(
-            status_code=400,
-            detail="scorerModelId is required. Choose which model will evaluate this output."
-        )
-
-    scorer_model = db.query(DBModel).filter(
-        DBModel.id == request.scorerModelId,
-        DBModel.workspace_id == workspace.id,
-        DBModel.status == "active"
-    ).first()
-    if not scorer_model:
-        raise HTTPException(status_code=404, detail="Scorer model not found or inactive")
-    
-    # 3. Score each metric
-    scores = {}
-    reasoning = {}
-    
-    for metric in request.metrics:
-        expected_line = ""
-        if request.expectedOutput:
-            expected_line = f"Expected output: {request.expectedOutput}"
-        
-        scoring_prompt = SCORING_PROMPT.format(
-            metric=metric,
-            interpolated_prompt=experiment.interpolated_prompt or experiment.user_template or "",
-            output=experiment.output or "",
-            expected_line=expected_line
-        )
-        
-        # 4. Call scorer model
-        system_prompt = "You are an objective AI evaluation assistant. Respond only in valid JSON."
-        try:
-            result = await call_provider(scorer_model, system_prompt, scoring_prompt)
-            if result["status"] == "error":
                 scores[metric] = 0
                 reasoning[metric] = "Failed to score (error calling model)"
             else:
@@ -361,5 +242,30 @@ async def batch_run_evaluation(
                 prompt_name=prompt.name,
                 prompt_version=f"v{version.version_number}",
                 model_name=model.name,
+                provider=model.provider,
+                system_prompt=version.system_prompt,
+                user_template=version.user_template,
+                variable_values=row.row_data,
+                interpolated_prompt=interpolated
+            )
+            experiments.append(experiment)
+            success_count += 1
+            
+        except Exception as e:
+            fail_count += 1
+            errors.append({
+                "rowIndex": i,
+                "message": str(e)
+            })
+        
+        # d. Delay between rows (skip after last row)
+        if i < len(rows_to_process) - 1:
+            await asyncio.sleep(0.5)  # 500ms between rows — rate limiting handled by retry
+    
+    # 5. Return summary
+    return {
+        "successCount": success_count,
+        "failCount": fail_count,
+        "experiments": [experiment_to_dict(exp) for exp in experiments],
         "errors": errors
     }
