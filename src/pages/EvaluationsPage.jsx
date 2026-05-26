@@ -400,6 +400,7 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
   const [expandedRows, setExpandedRows] = useState(new Set());
   const [isAIScoringOpen, setIsAIScoringOpen] = useState(false);
   const [scoringProgress, setScoringProgress] = useState(null);
+  const [scoringStatus, setScoringStatus] = useState('');
   const [successBanner, setSuccessBanner] = useState('');
   const [newBatchDatasetId, setNewBatchDatasetId] = useState('');
   const [newBatchPromptId, setNewBatchPromptId] = useState('');
@@ -582,12 +583,14 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
       }
 
       try {
+        setScoringStatus('Calling scorer model...');
         const result = await scoreEvaluation({
           experimentId: experiment.id,
           metrics,
           expectedOutput,
           scorerModelId
         });
+        setScoringStatus('');
 
         if (result.updatedExperiment) {
           // Update both the global experiments store and the local batchExperiments view
@@ -596,15 +599,21 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
           console.log(`Row scored by ${result.scorerModelName}`);
         }
       } catch (err) {
+        if (err.message?.includes('rate limit')) {
+          setScoringStatus('Rate limited — backend retrying automatically...');
+        } else {
+          setScoringStatus(`Error: ${err.message}`);
+        }
         console.error(`Failed to score experiment ${experiment.id}:`, err);
         // Keep the run moving if one item fails to score.
       }
 
-      // 3s delay — Groq free tier TPM limit is hit quickly with consecutive requests
-      await new Promise(r => setTimeout(r, 3000));
+      // The only delay needed is a small UI breathing room between experiments:
+      await new Promise(r => setTimeout(r, 500));
     }
 
     setScoringProgress(null);
+    setScoringStatus('');
   };
 
   if (viewMode === 'existing' && !isBatchesLoading && batches.length === 0 && experiments.length === 0) {
@@ -774,12 +783,20 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
           </div>
 
           {scoringProgress && (
-            <div className="mb-6 flex items-center justify-between rounded-lg border border-primary/30 bg-primary/10 p-3 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="h-5 w-5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
-                <span className="text-sm font-medium text-primary">⚡ Scoring {scoringProgress.current} of {scoringProgress.total} with AI...</span>
-                <span className="text-xs text-text-muted ml-2">Scores appear as each row completes</span>
-              </div>
+            <div style={{
+              padding: '10px 16px',
+              background: 'rgba(136, 210, 115, 0.1)',
+              border: '1px solid rgba(136, 210, 115, 0.3)',
+              borderRadius: 6,
+              marginBottom: 16,
+              fontSize: 13
+            }}>
+              <div>⚡ Scoring {scoringProgress.current} of {scoringProgress.total} with AI...</div>
+              {scoringStatus && (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                  {scoringStatus}
+                </div>
+              )}
             </div>
           )}
 
@@ -818,6 +835,20 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
                   const rowOverall = getOverall(experiment);
                   const hasScores = experiment.scores && Object.keys(experiment.scores).length > 0;
 
+                  const renderScore = (score) => {
+                    if (score === null || score === undefined) return (
+                      <span style={{ color: 'var(--text-muted)' }}>--</span>
+                    );
+                    if (score === -1) return (  // use -1 as sentinel for "failed"
+                      <span style={{ color: '#ff6b6b', fontSize: 11 }}>failed</span>
+                    );
+                    return (
+                      <span style={{ color: score > 70 ? '#88d273' : score > 40 ? '#e8a847' : '#ff6b6b' }}>
+                        {score}
+                      </span>
+                    );
+                  };
+
                   return (
                     <Fragment key={experiment.id}>
                       <tr onClick={() => toggleRow(experiment.id)} className={cn('group cursor-pointer border-b border-border transition-colors hover:bg-white/[0.02]', isExpanded && 'bg-white/[0.03]')}>
@@ -842,10 +873,8 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
                           )}
                         </td>
                         {METRICS.slice(0, 2).map((metric) => (
-                          <td key={metric} className="px-4 py-4 text-center">
-                            <span className={cn('font-mono text-xs font-bold', experiment.scores?.[metric] ? (experiment.scores[metric] > 80 ? 'text-primary' : experiment.scores[metric] > 40 ? 'text-amber-500' : 'text-red-500') : 'text-text-muted opacity-30')}>
-                              {experiment.scores?.[metric] ?? '--'}
-                            </span>
+                          <td key={metric} className="px-4 py-4 text-center font-mono text-xs font-bold">
+                            {renderScore(experiment.scores?.[metric])}
                           </td>
                         ))}
                         <td className="px-4 py-4">
