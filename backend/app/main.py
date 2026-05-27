@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 
 from app.core.config import settings
-from app.routers import auth, datasets, evaluations, experiments, inference, models, prompts
+from app.routers import auth, datasets, evaluations, experiments, inference, models, prompts, workspaces
 
 security = HTTPBearer()
 
@@ -24,6 +24,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(models.router, prefix="/api/models", tags=["models"])
 app.include_router(prompts.router, prefix="/api/prompts", tags=["prompts"])
+app.include_router(workspaces.router, prefix="/api/workspaces", tags=["workspaces"])
 app.include_router(datasets.router, prefix="/api/datasets", tags=["datasets"])
 app.include_router(experiments.router, prefix="/api/experiments", tags=["experiments"])
 app.include_router(inference.router, prefix="/api/inference", tags=["inference"])

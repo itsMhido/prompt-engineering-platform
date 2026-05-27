@@ -16,6 +16,9 @@ class LoginRequest(APIModel):
     email: EmailStr
     password: str
 
+class UpdateMeRequest(APIModel):
+    name: str
+
 class UserResponse(APIModel):
     id: str
     email: str

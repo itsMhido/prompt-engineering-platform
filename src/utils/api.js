@@ -1,15 +1,7 @@
+import { clearAuth, getToken, getUser, getWorkspace, setAuth } from './auth';
+
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'https://prompt-engineering-platform-production.up.railway.app').replace(/\/$/, '');
-const DEMO_EMAIL = import.meta.env.VITE_DEMO_EMAIL || 'codex-demo@prompt-platform.com';
-const DEMO_PASSWORD = import.meta.env.VITE_DEMO_PASSWORD || 'PromptPlatformDemo123!';
-const DEMO_NAME = import.meta.env.VITE_DEMO_NAME || 'Alex Developer';
 
-let sessionState = {
-  token: null,
-  user: null,
-  workspace: null
-};
-
-let bootstrapPromise = null;
 const sessionListeners = new Set();
 
 function emitSession() {
@@ -39,7 +31,13 @@ async function parseResponse(response) {
   }
 
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  let data = null;
+
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = null;
+  }
 
   if (!response.ok) {
     const detail = typeof data?.detail === 'string'
@@ -60,74 +58,70 @@ async function fetchJson(path, options = {}) {
     body,
     query,
     headers,
-    skipAuth = false,
-    retryOnAuthFailure = true
+    skipAuth = false
   } = options;
 
-  if (!skipAuth) {
-    await ensureSession();
-  }
+  const token = getToken();
 
   const response = await fetch(buildUrl(path, query), {
     method,
     headers: {
       Accept: 'application/json',
-      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-      ...(sessionState.token && !skipAuth ? { Authorization: `Bearer ${sessionState.token}` } : {}),
+      'Content-Type': 'application/json',
+      ...(!skipAuth ? { Authorization: `Bearer ${token}` } : {}),
       ...headers
     },
     body: body !== undefined ? JSON.stringify(body) : undefined
   });
 
-  if (response.status === 401 && !skipAuth && retryOnAuthFailure) {
-    resetSession();
-    await ensureSession();
-    return fetchJson(path, { ...options, retryOnAuthFailure: false });
+  if (response.status === 401 && !skipAuth) {
+    clearSession();
+    window.location.href = '/';
+    throw new Error('Session expired. Please log in again.');
   }
 
   return parseResponse(response);
 }
 
 function setSessionFromAuthResponse(authResponse) {
-  sessionState = {
-    token: authResponse.token,
-    user: authResponse.user,
-    workspace: authResponse.workspace
-  };
+  setAuth(authResponse.token, authResponse.user, authResponse.workspace);
   emitSession();
   return getSessionSnapshot();
 }
 
-function resetSession() {
-  sessionState = {
-    token: null,
-    user: null,
-    workspace: null
-  };
+function setSessionFromMeResponse(meResponse) {
+  const token = getToken();
+  setAuth(token, meResponse.user, meResponse.workspace);
+  emitSession();
+  return getSessionSnapshot();
+}
+
+export function clearSession() {
+  clearAuth();
   emitSession();
 }
 
-async function loginDemoUser() {
+export async function login({ email, password }) {
   return fetchJson('/api/auth/login', {
     method: 'POST',
     body: {
-      email: DEMO_EMAIL,
-      password: DEMO_PASSWORD
+      email,
+      password
     },
     skipAuth: true
-  });
+  }).then(setSessionFromAuthResponse);
 }
 
-async function registerDemoUser() {
+export async function register({ name, email, password }) {
   return fetchJson('/api/auth/register', {
     method: 'POST',
     body: {
-      email: DEMO_EMAIL,
-      password: DEMO_PASSWORD,
-      name: DEMO_NAME
+      name,
+      email,
+      password
     },
     skipAuth: true
-  });
+  }).then(setSessionFromAuthResponse);
 }
 
 function normalizeVersion(version) {
@@ -166,41 +160,47 @@ export function subscribeToSession(listener) {
 
 export function getSessionSnapshot() {
   return {
-    token: sessionState.token,
-    user: sessionState.user,
-    workspace: sessionState.workspace
+    token: getToken(),
+    user: getUser(),
+    workspace: getWorkspace()
   };
 }
 
 export async function ensureSession() {
-  if (sessionState.token) {
-    return getSessionSnapshot();
-  }
-
-  if (!bootstrapPromise) {
-    bootstrapPromise = (async () => {
-      try {
-        const auth = await loginDemoUser();
-        return setSessionFromAuthResponse(auth);
-      } catch (error) {
-        if (error.status && error.status !== 401) {
-          throw error;
-        }
-
-        const auth = await registerDemoUser();
-        return setSessionFromAuthResponse(auth);
-      }
-    })()
-      .finally(() => {
-        bootstrapPromise = null;
-      });
-  }
-
-  return bootstrapPromise;
+  return getSessionSnapshot();
 }
 
 export async function bootstrapApp() {
-  return ensureSession();
+  const me = await fetchJson('/api/auth/me');
+  return setSessionFromMeResponse(me);
+}
+
+export async function updateCurrentUser(payload) {
+  const data = await fetchJson('/api/auth/me', {
+    method: 'PATCH',
+    body: payload
+  });
+
+  setSessionFromMeResponse({
+    user: data.user,
+    workspace: getWorkspace()
+  });
+
+  return data.user;
+}
+
+export async function updateWorkspace(workspaceId, payload) {
+  const data = await fetchJson(`/api/workspaces/${workspaceId}`, {
+    method: 'PATCH',
+    body: payload
+  });
+
+  setSessionFromMeResponse({
+    user: getUser(),
+    workspace: data.workspace
+  });
+
+  return data.workspace;
 }
 
 export async function listModels() {

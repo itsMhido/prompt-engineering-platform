@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.schemas.auth import RegisterRequest, LoginRequest, AuthResponse, MeResponse
+from app.schemas.auth import RegisterRequest, LoginRequest, AuthResponse, MeResponse, UpdateMeRequest
 from app.models.user import User
 from app.models.workspace import Workspace, WorkspaceMember
 from app.core.auth import hash_password, verify_password, create_access_token, get_current_user
@@ -96,4 +96,25 @@ def me(current_user: User = Depends(get_current_user), db: Session = Depends(get
             "created_at": current_user.created_at.isoformat() if current_user.created_at else ""
         },
         "workspace": {"id": str(workspace.id), "name": workspace.name}
+    }
+
+
+@router.patch("/me", response_model=dict)
+def update_me(request: UpdateMeRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Name is required")
+
+    current_user.name = name
+    db.commit()
+    db.refresh(current_user)
+
+    return {
+        "user": {
+            "id": str(current_user.id),
+            "email": current_user.email,
+            "name": current_user.name,
+            "role": current_user.role,
+            "created_at": current_user.created_at.isoformat() if current_user.created_at else ""
+        }
     }

@@ -1,28 +1,39 @@
 import { useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
+import AuthPage from './pages/AuthPage';
 import PromptStudio from './pages/PromptStudio';
 import ExperimentsPage from './pages/ExperimentsPage';
 import ModelsPage from './pages/ModelsPage';
 import EvaluationsPage from './pages/EvaluationsPage';
 import DatasetsPage from './pages/DatasetsPage';
 import PromptsPage from './pages/PromptsPage';
-import { bootstrapApp, getSessionSnapshot, listModels, subscribeToSession } from './utils/api';
+import WorkspaceSettingsPage from './pages/WorkspaceSettingsPage';
+import { bootstrapApp, clearSession, getSessionSnapshot, listModels, subscribeToSession } from './utils/api';
+import { isAuthenticated } from './utils/auth';
 
 export default function App() {
+  const [authed, setAuthed] = useState(isAuthenticated());
   const [currentView, setCurrentView] = useState({ page: 'prompts' });
   const [session, setSession] = useState(getSessionSnapshot());
   const [activeModelName, setActiveModelName] = useState('');
   const [status, setStatus] = useState({ loading: true, error: '' });
 
   useEffect(() => {
-    let isMounted = true;
-
     const unsubscribe = subscribeToSession((nextSession) => {
-      if (isMounted) {
-        setSession(nextSession);
-      }
+      setSession(nextSession);
     });
+
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (!authed) {
+      return;
+    }
+
+    let isMounted = true;
+    setStatus({ loading: true, error: '' });
 
     (async () => {
       try {
@@ -50,9 +61,24 @@ export default function App() {
 
     return () => {
       isMounted = false;
-      unsubscribe();
     };
-  }, []);
+  }, [authed]);
+
+  const handleLogout = () => {
+    clearSession();
+    setSession(getSessionSnapshot());
+    setAuthed(false);
+    setCurrentView({ page: 'prompts' });
+  };
+
+  const handleAuthSuccess = () => {
+    setSession(getSessionSnapshot());
+    setAuthed(true);
+  };
+
+  if (!authed) {
+    return <AuthPage onAuthSuccess={handleAuthSuccess} />;
+  }
 
   if (status.loading) {
     return (
@@ -78,10 +104,15 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background text-sm">
-      <Sidebar currentView={currentView} setCurrentView={setCurrentView} />
+      <Sidebar currentView={currentView} setCurrentView={setCurrentView} onLogout={handleLogout} />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar session={session} activeModelName={activeModelName} />
+        <TopBar
+          session={session}
+          activeModelName={activeModelName}
+          onOpenWorkspaceSettings={() => setCurrentView({ page: 'workspace-settings' })}
+          onLogout={handleLogout}
+        />
 
         <main className="relative flex-1 overflow-hidden">
           {currentView.page === 'prompts' && (
@@ -100,6 +131,9 @@ export default function App() {
           {currentView.page === 'models' && <ModelsPage onModelsChanged={setActiveModelName} />}
           {currentView.page === 'evaluations' && <EvaluationsPage />}
           {currentView.page === 'datasets' && <DatasetsPage />}
+          {currentView.page === 'workspace-settings' && (
+            <WorkspaceSettingsPage session={session} onLogout={handleLogout} />
+          )}
         </main>
       </div>
     </div>

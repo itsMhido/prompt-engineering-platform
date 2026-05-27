@@ -44,10 +44,19 @@ export default function Sidebar({ currentView, setCurrentView }) {
       </nav>
 
       <div className="p-4 border-t border-border mt-auto">
-        <div className="flex items-center gap-3 px-3 py-2 text-text-muted hover:text-text-main cursor-pointer transition-colors">
+        <button
+          type="button"
+          onClick={() => setCurrentView({ page: 'workspace-settings' })}
+          className={cn(
+            "flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors",
+            currentView.page === 'workspace-settings'
+              ? "bg-primary/10 text-primary"
+              : "text-text-muted hover:text-text-main"
+          )}
+        >
           <Settings2 size={18} />
           <span>Workspace Settings</span>
-        </div>
+        </button>
       </div>
     </div>
   );
