@@ -161,22 +161,35 @@ export default function WorkspaceSettingsPage({ session, onLogout }) {
           </div>
         </section>
 
-        <section className="rounded-lg border border-red-500/30 bg-red-500/5 p-5">
-          <h3 className="mb-4 text-lg font-semibold text-red-300">Danger Zone</h3>
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="font-medium">Sign out of this session</p>
-              <p className="text-sm text-text-muted">You can sign back in with your email and password.</p>
+        <div style={{
+          borderTop: '1px solid #252320',
+          paddingTop: 24,
+          marginTop: 32
+        }}>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontWeight: 500, marginBottom: 4 }}>Sign out</div>
+            <div style={{ fontSize: 13, color: '#a1a1aa' }}>
+              You will be returned to the login screen.
             </div>
-            <button
-              type="button"
-              onClick={onLogout}
-              className="rounded-md border border-red-500/50 px-4 py-2 text-sm font-medium text-red-300 transition-colors hover:bg-red-500/10"
-            >
-              Sign Out
-            </button>
           </div>
-        </section>
+          <button
+            onClick={onLogout}
+            style={{
+              padding: '8px 16px',
+              border: '1px solid #3a2020',
+              borderRadius: 6,
+              background: 'transparent',
+              color: '#e05555',
+              cursor: 'pointer',
+              fontSize: 13,
+              transition: 'background 150ms ease'
+            }}
+            onMouseEnter={e => e.target.style.background = 'rgba(224, 85, 85, 0.08)'}
+            onMouseLeave={e => e.target.style.background = 'transparent'}
+          >
+            Sign out
+          </button>
+        </div>
       </div>
     </div>
   );

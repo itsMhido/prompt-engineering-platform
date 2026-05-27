@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState, useRef } from 'react';
 import {
   CheckCircle2, FlaskConical, AlertCircle, TrendingUp, Zap,
   Coins, ChevronRight, BarChart2, Table, ChevronDown,
@@ -14,6 +14,7 @@ import {
   listPrompts,
   listPromptVersions,
   runBatchEvaluation,
+  runPrompt,
   scoreEvaluation,
   updateExperiment
 } from '../utils/api';
@@ -131,7 +132,7 @@ export default function EvaluationsPage() {
           <div className="flex rounded-lg border border-border bg-panel p-1">
             <TabButton active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} icon={<TrendingUp size={16} />}>Overview</TabButton>
             <TabButton active={activeTab === 'comparison'} onClick={() => setActiveTab('comparison')} icon={<BarChart2 size={16} />}>Comparison</TabButton>
-            <TabButton active={activeTab === 'batch'} onClick={() => setActiveTab('batch')} icon={<Table size={16} />}>Batch Eval</TabButton>
+            <TabButton active={activeTab === 'batch' || activeTab === 'run-new-batch'} onClick={() => setActiveTab('batch')} icon={<Table size={16} />}>Batch Eval</TabButton>
           </div>
         </div>
       </div>
@@ -146,9 +147,10 @@ export default function EvaluationsPage() {
         {activeTab === 'overview' ? (
           <OverviewView experiments={experiments} setActiveTab={setActiveTab} />
         ) : activeTab === 'comparison' ? (
-          <ComparisonView experiments={experiments} datasets={datasets} onUpdateExperiment={handleUpdateExperiment} />
+          <ComparisonView experiments={experiments} datasets={datasets} onUpdateExperiment={handleUpdateExperiment} setActiveTab={setActiveTab} />
         ) : (
           <BatchEvalView
+            initialViewMode={activeTab === 'run-new-batch' ? 'new' : 'existing'}
             experiments={experiments}
             setExperiments={setExperiments}
             datasets={datasets}
@@ -222,10 +224,10 @@ function OverviewView({ experiments, setActiveTab }) {
         </div>
         <h2 className="mb-2 text-2xl font-bold text-text-main">No evaluated data yet</h2>
         <p className="mb-8 max-w-md text-center text-text-muted">
-          You need to score some experiments in the Batch Eval tab to see aggregate metrics here.
+          Run your first batch from the "Run New Batch" tab to see results here.
         </p>
-        <button onClick={() => setActiveTab('batch')} className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 font-bold text-panel transition-all hover:bg-primary/90">
-          Go to Batch Eval <ChevronRight size={18} />
+        <button onClick={() => setActiveTab('run-new-batch')} className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 font-bold text-panel transition-all hover:bg-primary/90">
+          Run New Batch <ChevronRight size={18} />
         </button>
       </div>
     );
@@ -296,7 +298,7 @@ function StatCard({ label, value, icon, color = 'text-text-main', highlight = fa
   );
 }
 
-function ComparisonView({ experiments, datasets, onUpdateExperiment }) {
+function ComparisonView({ experiments, datasets, onUpdateExperiment, setActiveTab }) {
   const [selectedDatasetId, setSelectedDatasetId] = useState('all');
   const [expAId, setExpAId] = useState('');
   const [expBId, setExpBId] = useState('');
@@ -340,7 +342,7 @@ function ComparisonView({ experiments, datasets, onUpdateExperiment }) {
   }, [expA, expB]);
 
   if (experiments.length === 0) {
-    return <EvalEmptyState />;
+    return <EvalEmptyState setActiveTab={setActiveTab} />;
   }
 
   return (
@@ -386,8 +388,12 @@ function Selector({ label, value, onChange, experiments }) {
   );
 }
 
-function BatchEvalView({ experiments, setExperiments, datasets, models, prompts, fetchDatasetDetail, onExperimentsAdded, onUpdateExperiment }) {
-  const [viewMode, setViewMode] = useState('existing');
+function BatchEvalView({ initialViewMode = 'existing', experiments, setExperiments, datasets, models, prompts, fetchDatasetDetail, onExperimentsAdded, onUpdateExperiment }) {
+  const [viewMode, setViewMode] = useState(initialViewMode);
+  
+  useEffect(() => {
+    if (initialViewMode === 'new') setViewMode('new');
+  }, [initialViewMode]);
   
   // Batch selector state
   const [batches, setBatches] = useState([]);
@@ -408,9 +414,22 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
   const [newBatchModelId, setNewBatchModelId] = useState('');
   const [varMappings, setVarMappings] = useState({});
   const [rowLimit, setRowLimit] = useState('all');
-  const [isRunningBatch, setIsRunningBatch] = useState(false);
   const [batchResult, setBatchResult] = useState(null);
   const [promptVersions, setPromptVersions] = useState([]);
+
+  const cancelRef = useRef(false);
+  const [cancelled, setCancelled] = useState(false);
+  useEffect(() => { cancelRef.current = cancelled; }, [cancelled]);
+
+  const [batchProgress, setBatchProgress] = useState({
+    isRunning: false,
+    current: 0,
+    total: 0,
+    succeeded: 0,
+    failed: 0,
+    currentStatus: '',
+    errors: []
+  });
 
   // Load batches on mount
   useEffect(() => {
@@ -476,12 +495,14 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
   }, [batchExperiments, experiments, selectedBatchId]);
 
   // Compute per-row overall from actual scores (excluding Toxicity)
+  const INVERSE_METRICS = ['Toxicity'];
+
   const getOverall = (experiment) => {
     if (!experiment.scores || Object.keys(experiment.scores).length === 0) return null;
     const scoreable = Object.entries(experiment.scores)
-      .filter(([metric]) => metric !== 'Toxicity')
+      .filter(([metric]) => !INVERSE_METRICS.includes(metric))
       .map(([, score]) => score)
-      .filter((s) => s != null);
+      .filter(s => s != null && typeof s === 'number' && s >= 0);
     if (scoreable.length === 0) return null;
     return Math.round(scoreable.reduce((a, b) => a + b, 0) / scoreable.length);
   };
@@ -499,8 +520,10 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
       METRICS.forEach((metric) => {
         if (experiment.scores[metric] !== undefined) {
           totals[metric] += experiment.scores[metric];
-          rowTotal += experiment.scores[metric];
-          count += 1;
+          if (metric !== 'Toxicity') {
+            rowTotal += experiment.scores[metric];
+            count += 1;
+          }
         }
       });
       if (count > 0) {
@@ -531,33 +554,104 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
 
   const handleRunNewBatch = async () => {
     try {
-      setIsRunningBatch(true);
       setBatchResult(null);
-      const result = await runBatchEvaluation({
-        promptId: newBatchPromptId,
-        versionId: newBatchVersionId,
-        datasetId: newBatchDatasetId,
-        modelId: newBatchModelId,
-        rowLimit,
-        variableMapping: varMappings,
-        delayMs: 300
+      setCancelled(false);
+      setBatchProgress({
+        isRunning: true,
+        current: 0,
+        total: 0,
+        succeeded: 0,
+        failed: 0,
+        currentStatus: 'Preparing batch run...',
+        errors: []
       });
 
-      onExperimentsAdded(result.experiments || []);
-      setBatchResult({ successCount: result.successCount, failCount: result.failCount });
-      setSuccessBanner(`Batch complete — ${result.successCount} experiments logged (${result.failCount} failed)`);
+      const dataset = await fetchDatasetDetail(newBatchDatasetId);
+      const version = promptVersions.find(v => v.id === newBatchVersionId);
+      const selectedModel = models.find(m => m.id === newBatchModelId);
 
-      // Refresh batch list and auto-select the new batch
+      const allRows = dataset.rows || [];
+      const limit = rowLimit === 'all' ? allRows.length : parseInt(rowLimit, 10);
+      const rowsToProcess = allRows.slice(0, limit);
+
+      setBatchProgress(prev => ({ ...prev, total: rowsToProcess.length }));
+      const newExperiments = [];
+
+      for (let i = 0; i < rowsToProcess.length; i++) {
+        if (cancelRef.current) break;
+
+        setBatchProgress(prev => ({
+          ...prev,
+          current: i + 1,
+          currentStatus: `Calling ${selectedModel.provider} API...`
+        }));
+
+        try {
+          const rowData = rowsToProcess[i];
+          let interpolated = version.userTemplate || '';
+          const variableValues = {};
+          
+          for (const [varName, colName] of Object.entries(varMappings)) {
+            if (!colName) continue;
+            const value = rowData[colName];
+            if (value === undefined || value === null) continue;
+            interpolated = interpolated.replace(new RegExp(`\\{${varName}\\}`, 'g'), String(value));
+            variableValues[varName] = value;
+          }
+
+          const result = await runPrompt({
+            modelId: newBatchModelId,
+            systemPrompt: version.systemPrompt,
+            userMessage: interpolated,
+            promptId: newBatchPromptId,
+            promptVersionId: newBatchVersionId,
+            userTemplate: version.userTemplate,
+            variableValues,
+            datasetId: newBatchDatasetId,
+            datasetRowIndex: i
+          });
+
+          if (result.experiment) {
+            newExperiments.push(result.experiment);
+          }
+
+          setBatchProgress(prev => ({
+            ...prev,
+            succeeded: prev.succeeded + 1,
+            currentStatus: `Row ${i + 1} completed successfully`
+          }));
+        } catch (err) {
+          const errorMsg = err.message || 'Unknown error';
+          const isRateLimit = errorMsg.toLowerCase().includes('rate limit') || errorMsg.toLowerCase().includes('retry');
+          
+          setBatchProgress(prev => ({
+            ...prev,
+            failed: prev.failed + 1,
+            currentStatus: isRateLimit
+              ? `Rate limited on row ${i + 1} — backend retrying automatically...`
+              : `Row ${i + 1} failed: ${errorMsg}`,
+            errors: [...prev.errors, { rowIndex: i, message: errorMsg }]
+          }));
+        }
+
+        await new Promise(r => setTimeout(r, 500));
+      }
+
+      onExperimentsAdded(newExperiments);
+      setBatchProgress(prev => {
+        setBatchResult({ successCount: prev.succeeded, failCount: prev.failed });
+        return { ...prev, isRunning: false, currentStatus: '' };
+      });
+      
       const freshBatches = await listBatches();
       setBatches(freshBatches);
-      const newBatch = result.experiments?.[0]?.batchId;
-      if (newBatch) setSelectedBatchId(newBatch);
-
-      setViewMode('existing');
-    } catch {
-      setSuccessBanner('');
-    } finally {
-      setIsRunningBatch(false);
+      
+      // Auto-select the ungrouped or latest batch
+      setSelectedBatchId('ungrouped');
+      
+    } catch (err) {
+      console.error(err);
+      setBatchProgress(prev => ({ ...prev, isRunning: false, currentStatus: 'Failed to start batch.' }));
     }
   };
 
@@ -616,9 +710,7 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
     setScoringStatus('');
   };
 
-  if (viewMode === 'existing' && !isBatchesLoading && batches.length === 0 && experiments.length === 0) {
-    return <EvalEmptyState />;
-  }
+
 
   return (
     <div className="flex h-full flex-col overflow-hidden p-8 animate-in fade-in duration-300">
@@ -684,16 +776,78 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
               <div className="pt-4">
                 <button
                   onClick={handleRunNewBatch}
-                  disabled={!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId || isRunningBatch}
+                  disabled={!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId || batchProgress.isRunning}
                   className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-4 font-black uppercase tracking-[0.2em] text-panel shadow-lg shadow-primary/20 transition-all hover:bg-primary/90"
-                  style={{ opacity: isRunningBatch ? 0.6 : (!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId ? 0.3 : 1), cursor: isRunningBatch ? 'not-allowed' : (!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId ? 'not-allowed' : 'pointer') }}
+                  style={{ opacity: batchProgress.isRunning ? 0.6 : (!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId ? 0.3 : 1), cursor: batchProgress.isRunning ? 'not-allowed' : (!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId ? 'not-allowed' : 'pointer') }}
                 >
-                  {!isRunningBatch && <Play size={18} fill="currentColor" />}
-                  {isRunningBatch ? 'Running...' : 'Run Batch'}
+                  {!batchProgress.isRunning && <Play size={18} fill="currentColor" />}
+                  {batchProgress.isRunning ? 'Running...' : 'Run Batch'}
                 </button>
-                {batchResult && (
-                  <div className="mt-2 text-xs text-text-muted">
-                    Completed: {batchResult.successCount} success, {batchResult.failCount} failed
+                
+                {batchProgress.isRunning && (
+                  <div style={{
+                    marginTop: 16,
+                    padding: 16,
+                    background: '#161613',
+                    border: '1px solid #252320',
+                    borderRadius: 8
+                  }}>
+                    {/* Progress bar */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                      <span style={{ fontSize: 13 }}>
+                        Running row {batchProgress.current} of {batchProgress.total}
+                      </span>
+                      <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+                        {batchProgress.succeeded} succeeded · {batchProgress.failed} failed
+                      </span>
+                    </div>
+                    <div style={{ height: 4, background: '#252320', borderRadius: 2, marginBottom: 12 }}>
+                      <div style={{
+                        height: '100%',
+                        width: `${(batchProgress.current / batchProgress.total) * 100}%`,
+                        background: '#88d273',
+                        borderRadius: 2,
+                        transition: 'width 300ms ease'
+                      }} />
+                    </div>
+                    {/* Current status */}
+                    <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
+                      {batchProgress.currentStatus}
+                    </div>
+                    {/* Recent errors */}
+                    {batchProgress.errors.length > 0 && (
+                      <div style={{ fontSize: 11, color: '#ff6b6b' }}>
+                        {batchProgress.errors.slice(-2).map((e, i) => (
+                          <div key={i}>Row {e.rowIndex + 1} failed: {e.message}</div>
+                        ))}
+                      </div>
+                    )}
+                    {/* Cancel button */}
+                    <button
+                      onClick={() => setCancelled(true)}
+                      style={{ marginTop: 8, fontSize: 12, color: 'var(--muted)',
+                        background: 'transparent', border: 'none', cursor: 'pointer',
+                        textDecoration: 'underline' }}>
+                      Cancel after current row
+                    </button>
+                  </div>
+                )}
+                
+                {batchResult && !batchProgress.isRunning && (
+                  <div style={{
+                    marginTop: 16, padding: 12,
+                    background: 'rgba(136, 210, 115, 0.08)',
+                    border: '1px solid rgba(136, 210, 115, 0.3)',
+                    borderRadius: 8, fontSize: 13
+                  }}>
+                    ✓ Batch complete —
+                    {batchResult.successCount} succeeded,
+                    {batchResult.failCount} failed
+                    <button onClick={() => setViewMode('existing')}
+                      style={{ marginLeft: 12, color: '#88d273', background: 'transparent',
+                        border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>
+                      View results →
+                    </button>
                   </div>
                 )}
               </div>
@@ -741,9 +895,18 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
                 </div>
 
                 {batches.length === 0 && (
-                  <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 8 }}>
-                    No batch runs yet — run a batch from the &quot;Run New Batch&quot; tab first.
-                  </p>
+                  <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--muted)' }}>
+                    <div style={{ fontSize: 32, marginBottom: 12 }}>📭</div>
+                    <div style={{ fontSize: 15, marginBottom: 8 }}>No batch runs yet</div>
+                    <div style={{ fontSize: 13, marginBottom: 20 }}>
+                      Run your first batch from the "Run New Batch" tab to see results here.
+                    </div>
+                    <button onClick={() => setViewMode('new')}
+                      style={{ padding: '8px 16px', border: '1px solid #88d273',
+                        borderRadius: 6, color: '#88d273', background: 'transparent', cursor: 'pointer' }}>
+                      Run New Batch →
+                    </button>
+                  </div>
                 )}
               </div>
               <button 
@@ -761,9 +924,10 @@ function BatchEvalView({ experiments, setExperiments, datasets, models, prompts,
                   {METRICS.map((metric) => (
                     <div key={metric} className="flex flex-col gap-1">
                       <span className="text-[10px] font-bold uppercase tracking-tighter text-text-muted">{metric}</span>
-                      <span className={cn('font-mono text-lg font-bold', parseFloat(summary[metric]) > 80 ? 'text-primary' : 'text-text-main')}>
-                        {isNaN(summary[metric]) ? '--' : `${summary[metric]}%`}
+                      <span className={cn('font-mono text-lg font-bold', metric === 'Toxicity' ? 'text-amber-500' : (parseFloat(summary[metric]) > 80 ? 'text-primary' : 'text-text-main'))}>
+                        {isNaN(summary[metric]) ? '--' : `${summary[metric]}%`}{metric === 'Toxicity' && !isNaN(summary[metric]) ? ' ✓' : ''}
                       </span>
+                      {metric === 'Toxicity' && <span className="text-[9px] text-text-muted">(lower is better)</span>}
                     </div>
                   ))}
                   <div className="mx-2 w-[1px] bg-border" />
@@ -1066,7 +1230,7 @@ function AIScoringModal({ dataset, activeModels, onCancel, onConfirm }) {
   );
 }
 
-function EvalEmptyState() {
+function EvalEmptyState({ setActiveTab }) {
   return (
     <div className="flex h-full flex-col items-center justify-center p-8 animate-in fade-in duration-500">
       <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -1074,10 +1238,10 @@ function EvalEmptyState() {
       </div>
       <h2 className="mb-2 text-2xl font-bold text-text-main">No evaluation data yet</h2>
       <p className="mb-8 max-w-md text-center text-text-muted">
-        Run some prompts in Prompt Studio or use the &quot;Run New Batch&quot; mode to generate outputs.
+        Run your first batch from the "Run New Batch" tab to see results here.
       </p>
-      <button className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 font-bold text-panel transition-all hover:bg-primary/90">
-        Go to Prompt Studio <ChevronRight size={18} />
+      <button onClick={() => setActiveTab('run-new-batch')} className="flex items-center gap-2 rounded-lg bg-primary px-6 py-3 font-bold text-panel transition-all hover:bg-primary/90">
+        Run New Batch <ChevronRight size={18} />
       </button>
     </div>
   );

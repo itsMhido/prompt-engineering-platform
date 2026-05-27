@@ -96,135 +96,174 @@ export default function AuthPage({ onAuthSuccess }) {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 text-text-main">
-      <div className="w-full max-w-[420px] rounded-xl border border-border bg-panel p-6 shadow-2xl">
-        <div className="mb-7 flex flex-col items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded border border-primary/50 bg-primary/20 font-bold text-primary">
-            PE
+    <div className="flex min-h-screen text-gray-200" style={{ backgroundColor: '#0d0d0b' }}>
+      {/* Left panel - Branding */}
+      <div className="hidden md:flex w-1/2 flex-col justify-between p-12 relative overflow-hidden" style={{ backgroundColor: '#0d0d0b' }}>
+        {/* Faint dot pattern */}
+        <div 
+          className="absolute inset-0 pointer-events-none opacity-20"
+          style={{ 
+            backgroundImage: 'radial-gradient(#ffffff 1px, transparent 1px)', 
+            backgroundSize: '24px 24px' 
+          }} 
+        />
+        
+        <div className="relative z-10 m-auto w-full max-w-md">
+          <h1 className="font-mono text-4xl font-bold tracking-tight mb-3" style={{ color: '#88d273' }}>
+            Prompt_Env
+          </h1>
+          <p className="mb-10 text-sm" style={{ color: '#888' }}>
+            Design, version, and evaluate prompts at scale
+          </p>
+          <ul className="space-y-4 text-sm" style={{ color: '#aaa' }}>
+            <li className="flex items-center gap-3">
+              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: '#88d273' }}></span>
+              Multi-provider inference
+            </li>
+            <li className="flex items-center gap-3">
+              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: '#88d273' }}></span>
+              Dataset-driven evaluation
+            </li>
+            <li className="flex items-center gap-3">
+              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: '#88d273' }}></span>
+              Version-controlled prompts
+            </li>
+          </ul>
+        </div>
+        
+        <div className="relative z-10 text-xs font-medium" style={{ color: '#555' }}>
+          Prompt Engineering Platform
+        </div>
+      </div>
+
+      {/* Right panel - Form */}
+      <div className="flex w-full min-h-screen items-center justify-center p-6 md:w-1/2" style={{ backgroundColor: '#161613' }}>
+        <div className="w-full max-w-[400px] p-8 rounded-xl" style={{ backgroundColor: '#1e1e1b', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)' }}>
+          
+          <div className="mb-8 flex gap-6 border-b border-[#2a2a27]">
+            {['login', 'register'].map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => switchTab(tab)}
+                className="pb-3 text-sm font-medium capitalize relative transition-colors"
+                style={{ color: activeTab === tab ? '#fff' : '#888' }}
+              >
+                {tab}
+                {activeTab === tab && (
+                  <span className="absolute bottom-0 left-0 w-full h-[2px] rounded-t" style={{ backgroundColor: '#88d273' }}></span>
+                )}
+              </button>
+            ))}
           </div>
-          <span className="font-mono text-xl font-bold tracking-tight">Prompt_Env</span>
+
+          {activeTab === 'login' ? (
+            <form onSubmit={handleLogin} className="space-y-5">
+              <Field label="Email">
+                <input
+                  type="email"
+                  value={loginForm.email}
+                  onChange={(event) => setLoginForm((prev) => ({ ...prev, email: event.target.value }))}
+                  className={fieldClass()}
+                  autoComplete="email"
+                />
+              </Field>
+
+              <Field label="Password">
+                <PasswordInput
+                  value={loginForm.password}
+                  onChange={(value) => setLoginForm((prev) => ({ ...prev, password: value }))}
+                  showPassword={showPassword}
+                  onToggle={() => setShowPassword((prev) => !prev)}
+                  autoComplete="current-password"
+                />
+              </Field>
+
+              <ErrorBanner error={error} onDismiss={() => setError('')} />
+
+              <div className="pt-2 space-y-5">
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="w-full font-medium transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 text-[#0d0d0b]"
+                  style={{ backgroundColor: '#88d273', borderRadius: '6px', height: '44px' }}
+                >
+                  {isLoading ? 'Signing in...' : 'Sign In'}
+                </button>
+
+                <div className="text-center text-sm" style={{ color: '#888' }}>
+                  Don&apos;t have an account?{' '}
+                  <button type="button" onClick={() => switchTab('register')} className="font-medium hover:underline" style={{ color: '#88d273' }}>
+                    Register
+                  </button>
+                </div>
+              </div>
+            </form>
+          ) : (
+            <form onSubmit={handleRegister} className="space-y-5">
+              <Field label="Full Name" error={fieldErrors.name}>
+                <input
+                  type="text"
+                  value={registerForm.name}
+                  onChange={(event) => setRegisterForm((prev) => ({ ...prev, name: event.target.value }))}
+                  className={fieldClass(fieldErrors.name)}
+                  autoComplete="name"
+                />
+              </Field>
+
+              <Field label="Email" error={fieldErrors.email}>
+                <input
+                  type="email"
+                  value={registerForm.email}
+                  onChange={(event) => setRegisterForm((prev) => ({ ...prev, email: event.target.value }))}
+                  className={fieldClass(fieldErrors.email)}
+                  autoComplete="email"
+                />
+              </Field>
+
+              <Field label="Password" error={fieldErrors.password}>
+                <PasswordInput
+                  value={registerForm.password}
+                  onChange={(value) => setRegisterForm((prev) => ({ ...prev, password: value }))}
+                  showPassword={showPassword}
+                  onToggle={() => setShowPassword((prev) => !prev)}
+                  hasError={Boolean(fieldErrors.password)}
+                  autoComplete="new-password"
+                />
+              </Field>
+
+              <Field label="Confirm Password" error={fieldErrors.confirmPassword}>
+                <input
+                  type="password"
+                  value={registerForm.confirmPassword}
+                  onChange={(event) => setRegisterForm((prev) => ({ ...prev, confirmPassword: event.target.value }))}
+                  className={fieldClass(fieldErrors.confirmPassword)}
+                  autoComplete="new-password"
+                />
+              </Field>
+
+              <ErrorBanner error={error} onDismiss={() => setError('')} />
+
+              <div className="pt-2 space-y-5">
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="w-full font-medium transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 text-[#0d0d0b]"
+                  style={{ backgroundColor: '#88d273', borderRadius: '6px', height: '44px' }}
+                >
+                  {isLoading ? 'Creating account...' : 'Create Account'}
+                </button>
+
+                <div className="text-center text-sm" style={{ color: '#888' }}>
+                  Already have an account?{' '}
+                  <button type="button" onClick={() => switchTab('login')} className="font-medium hover:underline" style={{ color: '#88d273' }}>
+                    Sign in
+                  </button>
+                </div>
+              </div>
+            </form>
+          )}
         </div>
-
-        <div className="mb-6 grid grid-cols-2 rounded-md border border-border bg-background p-1">
-          {['login', 'register'].map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              onClick={() => switchTab(tab)}
-              className={cn(
-                'rounded px-3 py-2 text-sm font-medium capitalize transition-colors',
-                activeTab === tab
-                  ? 'bg-primary text-panel'
-                  : 'text-text-muted hover:text-text-main'
-              )}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
-
-        {activeTab === 'login' ? (
-          <form onSubmit={handleLogin} className="space-y-4">
-            <Field label="Email">
-              <input
-                type="email"
-                value={loginForm.email}
-                onChange={(event) => setLoginForm((prev) => ({ ...prev, email: event.target.value }))}
-                className="w-full rounded border border-border bg-background px-3 py-2.5 text-sm text-text-main placeholder:text-text-muted focus:border-primary/50 focus:outline-none"
-                autoComplete="email"
-              />
-            </Field>
-
-            <Field label="Password">
-              <PasswordInput
-                value={loginForm.password}
-                onChange={(value) => setLoginForm((prev) => ({ ...prev, password: value }))}
-                showPassword={showPassword}
-                onToggle={() => setShowPassword((prev) => !prev)}
-                autoComplete="current-password"
-              />
-            </Field>
-
-            <ErrorBanner error={error} onDismiss={() => setError('')} />
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full rounded-md bg-primary px-4 py-2.5 font-medium text-panel transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isLoading ? 'Signing in...' : 'Sign In'}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => switchTab('register')}
-              className="w-full text-center text-sm text-text-muted transition-colors hover:text-primary"
-            >
-              Don&apos;t have an account? Register
-            </button>
-          </form>
-        ) : (
-          <form onSubmit={handleRegister} className="space-y-4">
-            <Field label="Full Name" error={fieldErrors.name}>
-              <input
-                type="text"
-                value={registerForm.name}
-                onChange={(event) => setRegisterForm((prev) => ({ ...prev, name: event.target.value }))}
-                className={fieldClass(fieldErrors.name)}
-                autoComplete="name"
-              />
-            </Field>
-
-            <Field label="Email" error={fieldErrors.email}>
-              <input
-                type="email"
-                value={registerForm.email}
-                onChange={(event) => setRegisterForm((prev) => ({ ...prev, email: event.target.value }))}
-                className={fieldClass(fieldErrors.email)}
-                autoComplete="email"
-              />
-            </Field>
-
-            <Field label="Password" error={fieldErrors.password}>
-              <PasswordInput
-                value={registerForm.password}
-                onChange={(value) => setRegisterForm((prev) => ({ ...prev, password: value }))}
-                showPassword={showPassword}
-                onToggle={() => setShowPassword((prev) => !prev)}
-                hasError={Boolean(fieldErrors.password)}
-                autoComplete="new-password"
-              />
-            </Field>
-
-            <Field label="Confirm Password" error={fieldErrors.confirmPassword}>
-              <input
-                type="password"
-                value={registerForm.confirmPassword}
-                onChange={(event) => setRegisterForm((prev) => ({ ...prev, confirmPassword: event.target.value }))}
-                className={fieldClass(fieldErrors.confirmPassword)}
-                autoComplete="new-password"
-              />
-            </Field>
-
-            <ErrorBanner error={error} onDismiss={() => setError('')} />
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full rounded-md bg-primary px-4 py-2.5 font-medium text-panel transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isLoading ? 'Creating account...' : 'Create Account'}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => switchTab('login')}
-              className="w-full text-center text-sm text-text-muted transition-colors hover:text-primary"
-            >
-              Already have an account? Sign in
-            </button>
-          </form>
-        )}
       </div>
     </div>
   );
@@ -233,7 +272,9 @@ export default function AuthPage({ onAuthSuccess }) {
 function Field({ label, error, children }) {
   return (
     <div>
-      <label className="mb-1.5 block text-sm font-medium">{label}</label>
+      <label className="mb-1.5 block font-mono text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+        {label}
+      </label>
       {children}
       {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
     </div>
@@ -253,7 +294,7 @@ function PasswordInput({ value, onChange, showPassword, onToggle, hasError = fal
       <button
         type="button"
         onClick={onToggle}
-        className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted transition-colors hover:text-text-main"
+        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 transition-colors hover:text-gray-300"
       >
         {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
       </button>
@@ -276,7 +317,7 @@ function ErrorBanner({ error, onDismiss }) {
 
 function fieldClass(error) {
   return cn(
-    'w-full rounded border bg-background px-3 py-2.5 text-sm text-text-main placeholder:text-text-muted focus:outline-none',
-    error ? 'border-red-500/60 focus:border-red-500' : 'border-border focus:border-primary/50'
+    'w-full rounded-md border bg-[#0f0f0d] px-3 py-2.5 text-sm text-gray-200 placeholder:text-gray-600 focus:outline-none transition-colors',
+    error ? 'border-red-500/60 focus:border-red-500' : 'border-[#2a2a27] focus:border-[#88d273]'
   );
 }
