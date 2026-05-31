@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { FlaskConical } from 'lucide-react';
-import { bulkDeleteExperiments, listExperiments, removeExperiment, updateExperiment } from '../utils/api';
+import { bulkDeleteExperiments, listExperiments, removeExperiment, updateExperiment, scoreEvaluation, listModels } from '../utils/api';
 
 export default function ExperimentsView() {
   const [experiments, setExperiments] = useState([]);
@@ -17,6 +17,50 @@ export default function ExperimentsView() {
   const [detailedExperiment, setDetailedExperiment] = useState(null);
   const [notesInput, setNotesInput] = useState('');
   const [error, setError] = useState('');
+  const mouseDownTarget = useRef(null);
+
+  const [isRescoring, setIsRescoring] = useState(false);
+  const [hoveredMetric, setHoveredMetric] = useState(null);
+  const [scorerModelId, setScorerModelId] = useState('');
+  const [models, setModels] = useState([]);
+
+  useEffect(() => {
+    listModels().then(result => {
+      const active = result.filter(m => m.status === 'active');
+      setModels(active);
+      if (active.length > 0) setScorerModelId(active[0].id);
+    }).catch(console.error);
+  }, []);
+
+  const handleRescore = async (experimentId, metric = null) => {
+    if (!scorerModelId || isRescoring) return;
+    setIsRescoring(true);
+
+    try {
+      const result = await scoreEvaluation({
+        experimentId,
+        metrics: metric ? [metric] : ['Relevance', 'Correctness', 'Fluency', 'Toxicity'],
+        scorerModelId
+      });
+
+      setExperiments((prev) => prev.map((e) => e.id === experimentId ? result.updatedExperiment : e));
+
+      if (detailedExperiment?.id === experimentId) {
+        setDetailedExperiment(result.updatedExperiment);
+      }
+    } catch (err) {
+      console.error('Rescore failed:', err);
+    } finally {
+      setIsRescoring(false);
+    }
+  };
+
+  const getScoreColor = (score) => {
+    if (score == null) return 'var(--muted)';
+    if (score >= 80) return '#88d273';
+    if (score >= 50) return '#e8a847';
+    return '#ff6b6b';
+  };
 
   useEffect(() => {
     (async () => {
@@ -416,8 +460,23 @@ export default function ExperimentsView() {
 
       {detailedExperiment && (
         <>
-          <div className="fixed inset-0 bg-black/40" style={{ zIndex: 40 }} onClick={() => setDetailedExperiment(null)} />
-          <div className="fixed right-0 top-0 flex h-screen w-full max-w-2xl flex-col overflow-y-auto border-l border-border bg-panel animate-in slide-in-from-right duration-300" style={{ zIndex: 50 }}>
+          <div 
+            className="fixed inset-0 bg-black/40" 
+            style={{ zIndex: 40 }} 
+            onMouseDown={(e) => { mouseDownTarget.current = e.target; }}
+            onMouseUp={(e) => {
+              if (mouseDownTarget.current === e.currentTarget && e.target === e.currentTarget) {
+                setDetailedExperiment(null);
+              }
+              mouseDownTarget.current = null;
+            }}
+          />
+          <div 
+            className="fixed right-0 top-0 flex h-screen w-full max-w-2xl flex-col overflow-y-auto border-l border-border bg-panel animate-in slide-in-from-right duration-300" 
+            style={{ zIndex: 50 }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onMouseUp={(e) => e.stopPropagation()}
+          >
             <div className="sticky top-0 z-10 flex items-start justify-between border-b border-border bg-panel p-6">
               <div className="flex items-center gap-3">
                 <span className="rounded border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-xs text-primary">{detailedExperiment.promptVersion}</span>
@@ -428,9 +487,6 @@ export default function ExperimentsView() {
             </div>
 
             <div className="space-y-6 p-6">
-              <Section title="System Prompt"><Panel>{detailedExperiment.systemPrompt}</Panel></Section>
-              <Section title="User Template"><Panel>{detailedExperiment.userTemplate}</Panel></Section>
-
               {detailedExperiment.variableValues && Object.keys(detailedExperiment.variableValues).length > 0 && (
                 <Section title="Variable Values">
                   <div className="flex flex-wrap gap-2">
@@ -443,6 +499,16 @@ export default function ExperimentsView() {
                 </Section>
               )}
 
+              <Section title="Output">
+                {detailedExperiment.status === 'error' ? (
+                  <div className="rounded border border-red-500/20 bg-red-500/10 p-4">
+                    <p className="font-mono text-sm text-red-300">{detailedExperiment.errorMessage}</p>
+                  </div>
+                ) : (
+                  <Panel>{detailedExperiment.output}</Panel>
+                )}
+              </Section>
+
               <div className="grid grid-cols-2 gap-4">
                 <Metric label="Latency" value={`${detailedExperiment.latencyMs}ms`} className={getLatencyColor(detailedExperiment.latencyMs)} />
                 <Metric label="Tokens" value={detailedExperiment.totalTokens} className="text-primary" />
@@ -453,25 +519,133 @@ export default function ExperimentsView() {
                 </div>
               </div>
 
-              <Section title="Score">
-                <div className="flex items-center gap-4">
-                  <input type="range" min="0" max="100" step="1" value={detailedExperiment.score || 0} onChange={(e) => handleUpdateScore(detailedExperiment.id, parseInt(e.target.value, 10))} className="flex-1" />
-                  <span className="text-lg font-bold text-primary">{detailedExperiment.score ?? '—'}</span>
+              <div className="space-y-4">
+                {/* Section header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <span style={{ fontSize: 11, fontFamily: 'monospace', letterSpacing: '0.08em', color: 'var(--muted)' }}>
+                    SCORES
+                  </span>
                 </div>
-              </Section>
+
+                {/* Scorer model selector row */}
+                <div style={{
+                  display: 'flex', gap: 8, alignItems: 'center',
+                  marginBottom: 16, padding: '10px 12px',
+                  background: '#0f0f0d', border: '1px solid #252320',
+                  borderRadius: 6
+                }}>
+                  <span style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }}>
+                    Scorer model:
+                  </span>
+                  <select
+                    value={scorerModelId}
+                    onChange={e => setScorerModelId(e.target.value)}
+                    style={{
+                      flex: 1, fontSize: 12, background: '#161613',
+                      border: '1px solid #252320', borderRadius: 4,
+                      color: '#f0ece4', padding: '4px 8px'
+                    }}
+                  >
+                    <option value="">Select a model...</option>
+                    {models.map(m => (
+                      <option key={m.id} value={m.id}>
+                        {m.name} · {m.provider}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => handleRescore(detailedExperiment.id, null)}
+                    disabled={!scorerModelId || isRescoring}
+                    style={{
+                      padding: '4px 12px', fontSize: 12,
+                      border: '1px solid #88d273', borderRadius: 4,
+                      background: 'transparent', color: '#88d273',
+                      cursor: scorerModelId && !isRescoring ? 'pointer' : 'not-allowed',
+                      opacity: scorerModelId && !isRescoring ? 1 : 0.4,
+                      whiteSpace: 'nowrap'
+                    }}
+                  >
+                    {isRescoring ? 'Scoring...' : '⚡ Score'}
+                  </button>
+                </div>
+
+                {/* Overall score bar */}
+                {detailedExperiment.score != null && (
+                  <div style={{ marginBottom: 20 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--muted)' }}>
+                        OVERALL SCORE
+                      </span>
+                      <span style={{ fontSize: 15, fontWeight: 600, color: getScoreColor(detailedExperiment.score) }}>
+                        {Math.round(detailedExperiment.score)}%
+                      </span>
+                    </div>
+                    <div style={{ height: 6, background: '#252320', borderRadius: 3 }}>
+                      <div style={{
+                        height: '100%', width: `${detailedExperiment.score}%`,
+                        background: getScoreColor(detailedExperiment.score),
+                        borderRadius: 3, transition: 'width 400ms ease'
+                      }} />
+                    </div>
+                  </div>
+                )}
+
+                {/* Per-metric breakdown */}
+                {detailedExperiment.scores && Object.keys(detailedExperiment.scores).length > 0
+                  ? Object.entries(detailedExperiment.scores).map(([metric, score]) => (
+                    <div key={metric} style={{ marginBottom: 14 }}
+                      onMouseEnter={() => setHoveredMetric(metric)}
+                      onMouseLeave={() => setHoveredMetric(null)}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: 12, color: 'var(--muted)' }}>{metric}</span>
+                          {hoveredMetric === metric && scorerModelId && (
+                            <button
+                              onClick={() => handleRescore(detailedExperiment.id, metric)}
+                              disabled={isRescoring}
+                              style={{
+                                fontSize: 10, padding: '1px 6px',
+                                border: '1px solid #252320', borderRadius: 3,
+                                background: 'transparent', color: 'var(--muted)',
+                                cursor: 'pointer', lineHeight: 1.6
+                              }}
+                            >
+                              ↺
+                            </button>
+                          )}
+                        </div>
+                        <span style={{ fontSize: 12, fontWeight: 500, color: getScoreColor(score) }}>
+                          {score != null && score >= 0 ? score : 'failed'}
+                        </span>
+                      </div>
+                      <div style={{ height: 4, background: '#252320', borderRadius: 2 }}>
+                        <div style={{
+                          height: '100%', width: `${Math.max(0, score ?? 0)}%`,
+                          background: getScoreColor(score), borderRadius: 2,
+                          transition: 'width 400ms ease'
+                        }} />
+                      </div>
+                      {detailedExperiment.reasoning?.[metric] && (
+                        <div style={{
+                          marginTop: 5, fontSize: 11,
+                          color: 'var(--muted)', fontStyle: 'italic', lineHeight: 1.5
+                        }}>
+                          "{detailedExperiment.reasoning[metric]}"
+                        </div>
+                      )}
+                    </div>
+                  ))
+                  : (
+                    <div style={{ color: 'var(--muted)', fontSize: 13, textAlign: 'center', padding: '20px 0' }}>
+                      Select a scorer model above and click ⚡ Score to evaluate this experiment.
+                    </div>
+                  )
+                }
+              </div>
 
               <Section title="Notes">
                 <textarea value={notesInput} onChange={(e) => setNotesInput(e.target.value)} onBlur={() => handleUpdateNotes(detailedExperiment.id, notesInput)} className="w-full resize-none rounded border border-border bg-background p-3 text-text-main focus:border-primary/50 focus:outline-none" rows="4" placeholder="Add notes..." />
-              </Section>
-
-              <Section title="Output">
-                {detailedExperiment.status === 'error' ? (
-                  <div className="rounded border border-red-500/20 bg-red-500/10 p-4">
-                    <p className="font-mono text-sm text-red-300">{detailedExperiment.errorMessage}</p>
-                  </div>
-                ) : (
-                  <Panel>{detailedExperiment.output}</Panel>
-                )}
               </Section>
             </div>
           </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import {
   Plus, Copy, CheckCircle2, Trash2, Edit2, Eye, EyeOff
 } from 'lucide-react';
@@ -34,6 +34,7 @@ export default function ModelsPage({ onModelsChanged }) {
   const [formData, setFormData] = useState(EMPTY_FORM);
   const [showApiKey, setShowApiKey] = useState(false);
   const [error, setError] = useState('');
+  const mouseDownTarget = useRef(null);
 
   useEffect(() => {
     const load = async () => {
@@ -280,8 +281,21 @@ export default function ModelsPage({ onModelsChanged }) {
       )}
 
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={closeModal}>
-          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-border bg-panel p-6" onClick={(e) => e.stopPropagation()}>
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" 
+          onMouseDown={(e) => { mouseDownTarget.current = e.target; }}
+          onMouseUp={(e) => {
+            if (mouseDownTarget.current === e.currentTarget && e.target === e.currentTarget) {
+              closeModal();
+            }
+            mouseDownTarget.current = null;
+          }}
+        >
+          <div 
+            className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-border bg-panel p-6" 
+            onMouseDown={(e) => e.stopPropagation()}
+            onMouseUp={(e) => e.stopPropagation()}
+          >
             <h3 className="mb-4 text-xl font-bold">{editingModel ? 'Edit Model' : 'Add New Model'}</h3>
 
             {error && (
@@ -339,7 +353,7 @@ export default function ModelsPage({ onModelsChanged }) {
               <div className="grid grid-cols-3 gap-4">
                 <div>
                   <label className="mb-1 block text-sm font-medium">Temperature: {formData.temperature}</label>
-                  <input type="range" min="0" max="2" step="0.1" value={formData.temperature} onChange={(e) => setFormData({ ...formData, temperature: parseFloat(e.target.value) })} className="w-full" />
+                  <input type="range" min="0" max="2" step="0.1" value={formData.temperature} onChange={(e) => setFormData({ ...formData, temperature: parseFloat(e.target.value) })} className="w-full" style={{ '--range-progress': `${(formData.temperature / 2) * 100}%` }} />
                 </div>
                 <div>
                   <label className="mb-1 block text-sm font-medium">Max Tokens</label>
@@ -352,7 +366,7 @@ export default function ModelsPage({ onModelsChanged }) {
                 </div>
                 <div>
                   <label className="mb-1 block text-sm font-medium">Top P: {formData.topP}</label>
-                  <input type="range" min="0" max="1" step="0.1" value={formData.topP} onChange={(e) => setFormData({ ...formData, topP: parseFloat(e.target.value) })} className="w-full" />
+                  <input type="range" min="0" max="1" step="0.1" value={formData.topP} onChange={(e) => setFormData({ ...formData, topP: parseFloat(e.target.value) })} className="w-full" style={{ '--range-progress': `${(formData.topP / 1) * 100}%` }} />
                 </div>
               </div>
               <div>

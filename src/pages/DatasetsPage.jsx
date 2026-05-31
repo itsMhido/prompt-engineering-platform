@@ -371,6 +371,7 @@ function CreateDatasetModal({ onClose, onCreate }) {
   const [category, setCategory] = useState('QA');
   const [columns, setColumns] = useState(['']);
   const [nameError, setNameError] = useState('');
+  const mouseDownTarget = useRef(null);
 
   useEffect(() => {
     const handler = (event) => {
@@ -421,8 +422,21 @@ function CreateDatasetModal({ onClose, onCreate }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div className="flex w-full max-w-lg flex-col gap-5 rounded-xl border border-border bg-panel p-6 animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+    <div 
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" 
+      onMouseDown={(e) => { mouseDownTarget.current = e.target; }}
+      onMouseUp={(e) => {
+        if (mouseDownTarget.current === e.currentTarget && e.target === e.currentTarget) {
+          onClose();
+        }
+        mouseDownTarget.current = null;
+      }}
+    >
+      <div 
+        className="flex w-full max-w-lg flex-col gap-5 rounded-xl border border-border bg-panel p-6 animate-in fade-in zoom-in-95 duration-200" 
+        onMouseDown={(e) => e.stopPropagation()}
+        onMouseUp={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold tracking-tight">Create Dataset</h3>
           <button onClick={onClose} className="text-xl leading-none text-text-muted transition-colors hover:text-text-main">×</button>
@@ -507,6 +521,7 @@ function UploadDatasetModal({ onClose, onImport }) {
   const [category, setCategory] = useState('QA');
   const [error, setError] = useState('');
   const [isDragging, setIsDragging] = useState(false);
+  const mouseDownTarget = useRef(null);
 
   const parseCSV = (text) => {
     const lines = text.split(/\r?\n/).filter((line) => line.trim());
@@ -612,8 +627,21 @@ function UploadDatasetModal({ onClose, onImport }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={onClose}>
-      <div className="flex w-full max-w-2xl flex-col gap-5 rounded-xl border border-border bg-panel p-6 animate-in fade-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+    <div 
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" 
+      onMouseDown={(e) => { mouseDownTarget.current = e.target; }}
+      onMouseUp={(e) => {
+        if (mouseDownTarget.current === e.currentTarget && e.target === e.currentTarget) {
+          onClose();
+        }
+        mouseDownTarget.current = null;
+      }}
+    >
+      <div 
+        className="flex w-full max-w-2xl flex-col gap-5 rounded-xl border border-border bg-panel p-6 animate-in fade-in zoom-in-95 duration-200" 
+        onMouseDown={(e) => e.stopPropagation()}
+        onMouseUp={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold tracking-tight">Upload Dataset</h3>
           <button onClick={onClose} className="text-xl leading-none text-text-muted transition-colors hover:text-text-main">×</button>

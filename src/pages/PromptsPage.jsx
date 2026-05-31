@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { FileText, Plus, Search, X } from 'lucide-react';
 import { cn, timeAgo } from '../utils/helpers';
 import {
@@ -240,6 +240,7 @@ function CreatePromptModal({ onClose, onCreated }) {
   const [tagInput, setTagInput] = useState('');
   const [tags, setTags] = useState([]);
   const [error, setError] = useState('');
+  const mouseDownTarget = useRef(null);
 
   useEffect(() => {
     const onEsc = (event) => event.key === 'Escape' && onClose();
@@ -271,8 +272,21 @@ function CreatePromptModal({ onClose, onCreated }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-xl border border-border bg-panel p-6" onClick={(e) => e.stopPropagation()}>
+    <div 
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4" 
+      onMouseDown={(e) => { mouseDownTarget.current = e.target; }}
+      onMouseUp={(e) => {
+        if (mouseDownTarget.current === e.currentTarget && e.target === e.currentTarget) {
+          onClose();
+        }
+        mouseDownTarget.current = null;
+      }}
+    >
+      <div 
+        className="w-full max-w-lg rounded-xl border border-border bg-panel p-6" 
+        onMouseDown={(e) => e.stopPropagation()}
+        onMouseUp={(e) => e.stopPropagation()}
+      >
         <h3 className="mb-4 text-lg font-bold">New Prompt</h3>
         {error && (
           <div className="mb-4 rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">

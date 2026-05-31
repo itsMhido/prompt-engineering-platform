@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Eye, EyeOff, X } from 'lucide-react';
 import * as api from '../utils/api';
 import { cn } from '../utils/helpers';
@@ -10,8 +10,13 @@ const EMPTY_FIELD_ERRORS = {
   confirmPassword: ''
 };
 
-export default function AuthPage({ onAuthSuccess }) {
-  const [activeTab, setActiveTab] = useState('login');
+export default function AuthPage({ onAuthSuccess, initialTab = 'login' }) {
+  const [activeTab, setActiveTab] = useState(initialTab);
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
+
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);

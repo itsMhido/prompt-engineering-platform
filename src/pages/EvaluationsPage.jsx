@@ -241,7 +241,7 @@ function OverviewView({ experiments, setActiveTab }) {
         <StatCard label="Scored Experiments" value={stats.totalEvaluated} icon={<FlaskConical size={18} />} />
         <StatCard label="Avg Relevance" value={`${stats.avgRelevance}%`} icon={<TrendingUp size={18} />} color="text-primary" />
         <StatCard label="Avg Correctness" value={`${stats.avgCorrectness}%`} icon={<CheckCircle2 size={18} />} color="text-primary" />
-        <StatCard label="Avg Toxicity" value={`${stats.avgToxicity}%`} icon={<AlertCircle size={18} />} color="text-amber-500" />
+        <StatCard label="Avg Toxicity" value={`${stats.avgToxicity}%`} icon={<AlertCircle size={18} />} color="text-primary" />
         <StatCard label="Avg Overall" value={`${stats.avgOverall}%`} icon={<Zap size={18} />} color="text-primary" highlight />
       </div>
 
@@ -657,13 +657,25 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
 
   const handleRunAIScoring = async ({ metrics, expectedOutputCol, scorerModelId }) => {
     setIsAIScoringOpen(false);
+    localStorage.setItem('lastScorerModelId', scorerModelId);
 
-    const unscored = datasetExps.filter((experiment) => !metrics.every((metric) => experiment.scores?.[metric] !== undefined));
-    if (unscored.length === 0) {
-      return;
+    const unscored = datasetExps.filter((experiment) => experiment.status === 'success' && !metrics.every((metric) => experiment.scores?.[metric] !== undefined));
+    const skippedErrors = datasetExps.filter(e => e.status === 'error').length;
+
+    if (skippedErrors > 0 || unscored.length > 0) {
+      setScoringProgress({ current: 0, total: unscored.length });
     }
 
-    setScoringProgress({ current: 0, total: unscored.length });
+    if (skippedErrors > 0) {
+      setScoringStatus(`Skipping ${skippedErrors} failed experiment${skippedErrors > 1 ? 's' : ''}`);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    if (unscored.length === 0) {
+      setScoringProgress(null);
+      setScoringStatus('');
+      return;
+    }
 
     for (let index = 0; index < unscored.length; index += 1) {
       const experiment = unscored[index];
@@ -924,10 +936,9 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
                   {METRICS.map((metric) => (
                     <div key={metric} className="flex flex-col gap-1">
                       <span className="text-[10px] font-bold uppercase tracking-tighter text-text-muted">{metric}</span>
-                      <span className={cn('font-mono text-lg font-bold', metric === 'Toxicity' ? 'text-amber-500' : (parseFloat(summary[metric]) > 80 ? 'text-primary' : 'text-text-main'))}>
-                        {isNaN(summary[metric]) ? '--' : `${summary[metric]}%`}{metric === 'Toxicity' && !isNaN(summary[metric]) ? ' ✓' : ''}
+                      <span className={cn('font-mono text-lg font-bold', parseFloat(summary[metric]) > 80 ? 'text-primary' : 'text-text-main')}>
+                        {isNaN(summary[metric]) ? '--' : `${summary[metric]}%`}
                       </span>
-                      {metric === 'Toxicity' && <span className="text-[9px] text-text-muted">(lower is better)</span>}
                     </div>
                   ))}
                   <div className="mx-2 w-[1px] bg-border" />
@@ -1083,7 +1094,7 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
                                   </label>
                                   <div className="grid grid-cols-2 gap-x-8 gap-y-4">
                                     {METRICS.map((metric) => (
-                                      <ScoreBar key={metric} label={metric} score={experiment.scores?.[metric]} onChange={(value) => onUpdateExperiment({ ...experiment, scores: { ...(experiment.scores || {}), [metric]: value } })} bg={metric === 'Toxicity' ? 'bg-amber-500' : 'bg-primary'} />
+                                      <ScoreBar key={metric} label={metric} score={experiment.scores?.[metric]} />
                                     ))}
                                   </div>
                                   <div className="space-y-2 pt-4">
@@ -1155,7 +1166,7 @@ function FilterField({ label, value, onChange, options }) {
 function AIScoringModal({ dataset, activeModels, onCancel, onConfirm }) {
   const [selectedMetrics, setSelectedMetrics] = useState(['Relevance', 'Correctness']);
   const [expectedOutputCol, setExpectedOutputCol] = useState('');
-  const [scorerModelId, setScorerModelId] = useState('');
+  const [scorerModelId, setScorerModelId] = useState(() => activeModels.length > 0 ? activeModels[0].id : '');
 
   const toggleMetric = (metric) => {
     setSelectedMetrics((prev) => prev.includes(metric) ? prev.filter((value) => value !== metric) : [...prev, metric]);
@@ -1293,7 +1304,7 @@ function EvalPanel({ exp, isWinner, isTie, onUpdateScore }) {
             <label className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Metrics & Scoring</label>
           </div>
           {METRICS.map((metric) => (
-            <ScoreBar key={metric} label={metric} score={(exp.scores || {})[metric]} onChange={(value) => onUpdateScore(metric, value)} bg={metric === 'Toxicity' ? 'bg-amber-500' : 'bg-primary'} />
+            <ScoreBar key={metric} label={metric} score={(exp.scores || {})[metric]} />
           ))}
         </div>
       </div>
@@ -1310,7 +1321,7 @@ function InfoMetric({ icon, label, value }) {
   );
 }
 
-function ScoreBar({ label, score, onChange, bg = 'bg-primary' }) {
+function ScoreBar({ label, score }) {
   const hasScore = typeof score === 'number';
   const displayScore = hasScore ? score : 0;
 
@@ -1319,15 +1330,13 @@ function ScoreBar({ label, score, onChange, bg = 'bg-primary' }) {
       <div className="flex items-end justify-between text-[10px]">
         <span className="font-medium text-text-muted">{label}</span>
         <span className={cn('font-mono font-bold', hasScore ? 'text-text-main' : 'italic text-text-muted')}>
-          {hasScore ? `${score}%` : 'Click to score'}
+          {hasScore ? `${score}%` : '--'}
         </span>
       </div>
-      <div className="group/slider relative flex h-2 items-center">
-        <input type="range" min="0" max="100" value={displayScore} onChange={(e) => onChange(parseInt(e.target.value, 10))} className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0" />
+      <div className="relative flex h-2 items-center">
         <div className="h-1.5 w-full overflow-hidden rounded-full border border-border/50 bg-background">
-          <div className={cn('h-full transition-all duration-300', bg, !hasScore && 'opacity-0')} style={{ width: `${displayScore}%` }} />
+          <div className={cn('h-full transition-all duration-300 bg-primary', !hasScore && 'opacity-0')} style={{ width: `${displayScore}%` }} />
         </div>
-        <div className="pointer-events-none absolute h-3 w-3 rounded-full border-2 border-primary bg-white opacity-0 shadow-sm transition-opacity group-hover/slider:opacity-100" style={{ left: `calc(${displayScore}% - 6px)` }} />
       </div>
     </div>
   );

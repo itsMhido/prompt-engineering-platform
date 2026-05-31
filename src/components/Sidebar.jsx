@@ -18,7 +18,22 @@ export default function Sidebar({ currentView, setCurrentView }) {
         <div className="w-8 h-8 rounded bg-primary/20 border border-primary/50 flex items-center justify-center text-primary font-bold">
           PE
         </div>
-        <span className="font-mono text-text-main font-bold tracking-tight">Prompt_Env</span>
+        <span
+          onClick={() => {
+            window.history.pushState({}, '', '/');
+            window.dispatchEvent(new PopStateEvent('popstate'));
+          }}
+          style={{
+            cursor: 'pointer',
+            fontFamily: 'monospace',
+            color: '#88d273',
+            userSelect: 'none',
+            fontWeight: 'bold',
+            letterSpacing: '-0.025em'
+          }}
+        >
+          Prompt_Env
+        </span>
       </div>
 
       <nav className="flex-1 px-4 space-y-1">

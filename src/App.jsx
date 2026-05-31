@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import TopBar from './components/TopBar';
 import AuthPage from './pages/AuthPage';
+import LandingPage from './pages/LandingPage';
 import PromptStudio from './pages/PromptStudio';
 import ExperimentsPage from './pages/ExperimentsPage';
 import ModelsPage from './pages/ModelsPage';
@@ -18,6 +19,20 @@ export default function App() {
   const [session, setSession] = useState(getSessionSnapshot());
   const [activeModelName, setActiveModelName] = useState('');
   const [status, setStatus] = useState({ loading: true, error: '' });
+  const [currentPath, setCurrentPath] = useState(window.location.pathname);
+
+  useEffect(() => {
+    const handlePopState = () => setCurrentPath(window.location.pathname);
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  useEffect(() => {
+    if (authed && (currentPath === '/login' || currentPath === '/register')) {
+      window.history.replaceState({}, '', '/app');
+      setCurrentPath('/app');
+    }
+  }, [authed, currentPath]);
 
   useEffect(() => {
     const unsubscribe = subscribeToSession((nextSession) => {
@@ -69,15 +84,29 @@ export default function App() {
     setSession(getSessionSnapshot());
     setAuthed(false);
     setCurrentView({ page: 'prompts' });
+    window.history.pushState({}, '', '/');
+    setCurrentPath('/');
   };
 
   const handleAuthSuccess = () => {
     setSession(getSessionSnapshot());
     setAuthed(true);
+    window.history.pushState({}, '', '/app');
+    setCurrentPath('/app');
   };
 
   if (!authed) {
-    return <AuthPage onAuthSuccess={handleAuthSuccess} />;
+    if (currentPath === '/login') {
+      return <AuthPage onAuthSuccess={handleAuthSuccess} initialTab="login" />;
+    }
+    if (currentPath === '/register') {
+      return <AuthPage onAuthSuccess={handleAuthSuccess} initialTab="register" />;
+    }
+    return <LandingPage authed={authed} />;
+  }
+
+  if (authed && currentPath === '/') {
+    return <LandingPage authed={authed} />;
   }
 
   if (status.loading) {
