@@ -477,18 +477,26 @@ export default function ExperimentsView() {
             onMouseDown={(e) => e.stopPropagation()}
             onMouseUp={(e) => e.stopPropagation()}
           >
-            <div className="sticky top-0 z-10 flex items-start justify-between border-b border-border bg-panel p-6">
-              <div className="flex items-center gap-3">
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '20px 24px', borderBottom: '1px solid #252320',
+              position: 'sticky', top: 0, zIndex: 10, background: 'var(--panel)',
+              width: '100%', boxSizing: 'border-box'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                 <span className="rounded border border-primary/30 bg-primary/10 px-2 py-0.5 font-mono text-xs text-primary">{detailedExperiment.promptVersion}</span>
                 <span className="rounded border border-border bg-white/5 px-2 py-0.5 text-xs text-text-main">{detailedExperiment.promptName || 'Unknown Prompt'}</span>
                 <span className="text-sm text-text-muted">{detailedExperiment.model || detailedExperiment.modelName} · {detailedExperiment.provider}</span>
               </div>
-              <button onClick={() => setDetailedExperiment(null)} className="text-lg leading-none text-text-muted hover:text-text-main">✕</button>
+              <button onClick={() => setDetailedExperiment(null)} className="text-lg leading-none text-text-muted hover:text-text-main" style={{ paddingLeft: 12 }}>✕</button>
             </div>
 
-            <div className="space-y-6 p-6">
+            <div style={{ display: 'flex', flexDirection: 'column', width: '100%', boxSizing: 'border-box' }}>
               {detailedExperiment.variableValues && Object.keys(detailedExperiment.variableValues).length > 0 && (
-                <Section title="Variable Values">
+                <div style={{ padding: '20px 24px', borderBottom: '1px solid #252320', width: '100%', boxSizing: 'border-box' }}>
+                  <span style={{ fontSize: 11, fontFamily: 'monospace', letterSpacing: '0.08em', color: 'var(--muted)', textTransform: 'uppercase', display: 'block', marginBottom: 12 }}>
+                    Variable Values
+                  </span>
                   <div className="flex flex-wrap gap-2">
                     {Object.entries(detailedExperiment.variableValues).map(([key, value]) => (
                       <span key={key} className="rounded border border-primary/30 bg-primary/10 px-3 py-1 text-sm font-mono text-primary">
@@ -496,41 +504,75 @@ export default function ExperimentsView() {
                       </span>
                     ))}
                   </div>
-                </Section>
+                </div>
               )}
 
-              <Section title="Output">
+              <div style={{ padding: '20px 24px', borderBottom: '1px solid #252320', width: '100%', boxSizing: 'border-box' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <span style={{ fontSize: 11, fontFamily: 'monospace', letterSpacing: '0.08em', color: 'var(--muted)', textTransform: 'uppercase' }}>
+                    Output
+                  </span>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(detailedExperiment.output || '')}
+                    title="Copy output"
+                    style={{ background: 'transparent', border: 'none', color: 'var(--muted)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  </button>
+                </div>
                 {detailedExperiment.status === 'error' ? (
-                  <div className="rounded border border-red-500/20 bg-red-500/10 p-4">
-                    <p className="font-mono text-sm text-red-300">{detailedExperiment.errorMessage}</p>
+                  <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: 6, padding: '14px 16px', fontFamily: 'IBM Plex Mono, monospace', fontSize: 13, color: '#fca5a5' }}>
+                    {detailedExperiment.errorMessage}
                   </div>
                 ) : (
-                  <Panel>{detailedExperiment.output}</Panel>
+                  <div style={{
+                    background: '#0f0f0d',
+                    border: '1px solid #252320',
+                    borderRadius: 6,
+                    padding: '14px 16px',
+                    fontFamily: 'IBM Plex Mono, monospace',
+                    fontSize: 13,
+                    lineHeight: 1.7,
+                    color: '#f0ece4',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    maxHeight: 200,
+                    overflowY: 'auto'
+                  }}>
+                    {detailedExperiment.output || 'No output'}
+                  </div>
                 )}
-              </Section>
+              </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <Metric label="Latency" value={`${detailedExperiment.latencyMs}ms`} className={getLatencyColor(detailedExperiment.latencyMs)} />
-                <Metric label="Tokens" value={detailedExperiment.totalTokens} className="text-primary" />
-                <Metric label="Cost" value={detailedExperiment.costEstimate} className="text-green-500/80" />
-                <div>
-                  <p className="mb-2 text-xs text-text-muted">Status</p>
-                  <span className={`rounded px-2 py-1 text-sm font-bold ${detailedExperiment.status === 'success' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>{detailedExperiment.status}</span>
+              <div style={{ padding: '20px 24px', borderBottom: '1px solid #252320', width: '100%', boxSizing: 'border-box' }}>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {[
+                    { label: 'Latency', value: `${detailedExperiment.latencyMs || 0}ms`, color: detailedExperiment.latencyMs > 3000 ? '#e8a847' : '#6b6860' },
+                    { label: 'Tokens', value: detailedExperiment.totalTokens || 0, color: '#6b6860' },
+                    { label: 'Cost', value: detailedExperiment.costEstimate > 0 ? `$${detailedExperiment.costEstimate}` : 'Free', color: '#6b6860' },
+                    { label: 'Status', value: detailedExperiment.status, color: detailedExperiment.status === 'success' ? '#88d273' : '#ff6b6b' }
+                  ].map(({ label, value, color }) => (
+                    <div key={label} style={{
+                      padding: '6px 12px', background: '#0f0f0d', border: '1px solid #252320',
+                      borderRadius: 20, display: 'flex', gap: 6, alignItems: 'center'
+                    }}>
+                      <span style={{ fontSize: 11, color: '#6b6860' }}>{label}</span>
+                      <span style={{ fontSize: 12, fontWeight: 500, color }}>{value}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              <div className="space-y-4">
-                {/* Section header */}
+              <div style={{ padding: '20px 24px', borderBottom: '1px solid #252320', width: '100%', boxSizing: 'border-box' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                  <span style={{ fontSize: 11, fontFamily: 'monospace', letterSpacing: '0.08em', color: 'var(--muted)' }}>
+                  <span style={{ fontSize: 11, fontFamily: 'monospace', letterSpacing: '0.08em', color: 'var(--muted)', textTransform: 'uppercase' }}>
                     SCORES
                   </span>
                 </div>
 
-                {/* Scorer model selector row */}
                 <div style={{
                   display: 'flex', gap: 8, alignItems: 'center',
-                  marginBottom: 16, padding: '10px 12px',
+                  marginBottom: 20, padding: '10px 12px',
                   background: '#0f0f0d', border: '1px solid #252320',
                   borderRadius: 6
                 }}>
@@ -569,9 +611,8 @@ export default function ExperimentsView() {
                   </button>
                 </div>
 
-                {/* Overall score bar */}
                 {detailedExperiment.score != null && (
-                  <div style={{ marginBottom: 20 }}>
+                  <div style={{ marginBottom: 24 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                       <span style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--muted)' }}>
                         OVERALL SCORE
@@ -580,20 +621,19 @@ export default function ExperimentsView() {
                         {Math.round(detailedExperiment.score)}%
                       </span>
                     </div>
-                    <div style={{ height: 6, background: '#252320', borderRadius: 3 }}>
+                    <div style={{ height: 8, background: '#252320', borderRadius: 4 }}>
                       <div style={{
                         height: '100%', width: `${detailedExperiment.score}%`,
                         background: getScoreColor(detailedExperiment.score),
-                        borderRadius: 3, transition: 'width 400ms ease'
+                        borderRadius: 4, transition: 'width 400ms ease'
                       }} />
                     </div>
                   </div>
                 )}
 
-                {/* Per-metric breakdown */}
                 {detailedExperiment.scores && Object.keys(detailedExperiment.scores).length > 0
                   ? Object.entries(detailedExperiment.scores).map(([metric, score]) => (
-                    <div key={metric} style={{ marginBottom: 14 }}
+                    <div key={metric} style={{ marginBottom: 20 }}
                       onMouseEnter={() => setHoveredMetric(metric)}
                       onMouseLeave={() => setHoveredMetric(null)}
                     >
@@ -628,10 +668,11 @@ export default function ExperimentsView() {
                       </div>
                       {detailedExperiment.reasoning?.[metric] && (
                         <div style={{
-                          marginTop: 5, fontSize: 11,
-                          color: 'var(--muted)', fontStyle: 'italic', lineHeight: 1.5
+                          marginTop: 8, padding: '8px 12px', background: '#0f0f0d',
+                          borderLeft: '2px solid #252320', borderRadius: '0 4px 4px 0',
+                          fontSize: 12, color: '#6b6860', lineHeight: 1.6, fontStyle: 'normal'
                         }}>
-                          "{detailedExperiment.reasoning[metric]}"
+                          {detailedExperiment.reasoning[metric]}
                         </div>
                       )}
                     </div>
@@ -644,9 +685,28 @@ export default function ExperimentsView() {
                 }
               </div>
 
-              <Section title="Notes">
-                <textarea value={notesInput} onChange={(e) => setNotesInput(e.target.value)} onBlur={() => handleUpdateNotes(detailedExperiment.id, notesInput)} className="w-full resize-none rounded border border-border bg-background p-3 text-text-main focus:border-primary/50 focus:outline-none" rows="4" placeholder="Add notes..." />
-              </Section>
+              <div style={{ padding: '20px 24px', width: '100%', boxSizing: 'border-box' }}>
+                <div style={{ marginBottom: 12 }}>
+                  <span style={{
+                    fontSize: 11, fontFamily: 'monospace', letterSpacing: '0.08em',
+                    color: 'var(--muted)', textTransform: 'uppercase'
+                  }}>
+                    Notes
+                  </span>
+                </div>
+                <textarea
+                  value={notesInput}
+                  onChange={(e) => setNotesInput(e.target.value)}
+                  onBlur={() => handleUpdateNotes(detailedExperiment.id, notesInput)}
+                  placeholder="Add notes..."
+                  style={{
+                    width: '100%', minHeight: 80, background: '#0f0f0d',
+                    border: '1px solid #252320', borderRadius: 6, padding: '10px 12px',
+                    color: '#f0ece4', fontSize: 13, lineHeight: 1.6, resize: 'vertical',
+                    fontFamily: 'IBM Plex Sans, sans-serif', boxSizing: 'border-box'
+                  }}
+                />
+              </div>
             </div>
           </div>
         </>

@@ -145,7 +145,7 @@ export default function EvaluationsPage() {
 
       <div className="flex-1 overflow-hidden">
         {activeTab === 'overview' ? (
-          <OverviewView experiments={experiments} setActiveTab={setActiveTab} />
+          <OverviewView experiments={experiments} prompts={prompts} setActiveTab={setActiveTab} />
         ) : activeTab === 'comparison' ? (
           <ComparisonView experiments={experiments} datasets={datasets} onUpdateExperiment={handleUpdateExperiment} setActiveTab={setActiveTab} />
         ) : (
@@ -180,7 +180,9 @@ function TabButton({ active, onClick, icon, children }) {
   );
 }
 
-function OverviewView({ experiments, setActiveTab }) {
+function OverviewView({ experiments, prompts, setActiveTab }) {
+  const [selectedPromptId, setSelectedPromptId] = useState('all');
+
   const scoredExperiments = useMemo(() => experiments.filter((experiment) => experiment.scores && Object.keys(experiment.scores).length > 0), [experiments]);
 
   const stats = useMemo(() => {
@@ -213,8 +215,19 @@ function OverviewView({ experiments, setActiveTab }) {
     };
   }, [scoredExperiments]);
 
-  const modelComparison = useMemo(() => buildGroupedScores(scoredExperiments, 'modelName'), [scoredExperiments]);
-  const versionComparison = useMemo(() => buildGroupedScores(scoredExperiments, 'promptVersion'), [scoredExperiments]);
+  const modelComparison = useMemo(() => {
+    const filtered = selectedPromptId === 'all' 
+      ? scoredExperiments 
+      : scoredExperiments.filter(e => e.promptId === selectedPromptId);
+    return buildGroupedScores(filtered, 'modelName');
+  }, [scoredExperiments, selectedPromptId]);
+
+  const versionComparison = useMemo(() => {
+    const filtered = selectedPromptId === 'all' 
+      ? scoredExperiments 
+      : scoredExperiments.filter(e => e.promptId === selectedPromptId);
+    return buildGroupedScores(filtered, 'promptVersion');
+  }, [scoredExperiments, selectedPromptId]);
 
   if (scoredExperiments.length === 0) {
     return (
@@ -235,6 +248,23 @@ function OverviewView({ experiments, setActiveTab }) {
 
   const findMax = (rows, key) => Math.max(...rows.map((row) => parseFloat(row[key])));
 
+  const promptSelector = (
+    <select
+      value={selectedPromptId}
+      onChange={e => setSelectedPromptId(e.target.value)}
+      style={{
+        fontSize: 12, background: '#161613',
+        border: '1px solid #252320', borderRadius: 4,
+        color: '#f0ece4', padding: '4px 10px'
+      }}
+    >
+      <option value="all">All prompts</option>
+      {prompts.map(p => (
+        <option key={p.id} value={p.id}>{p.name}</option>
+      ))}
+    </select>
+  );
+
   return (
     <div className="h-full space-y-10 overflow-y-auto p-8 pb-20 animate-in fade-in duration-300">
       <div className="grid grid-cols-5 gap-6">
@@ -246,17 +276,20 @@ function OverviewView({ experiments, setActiveTab }) {
       </div>
 
       <div className="grid grid-cols-2 gap-8">
-        <ComparisonTable title="Performance by Model" rows={modelComparison} primaryColumn="name" secondaryColumn="prompt" highlightKey="Relevance" overallKey="Overall" findMax={findMax} />
-        <ComparisonTable title="Performance by Version" rows={versionComparison} primaryColumn="name" secondaryColumn="prompt" highlightKey="Correctness" overallKey="Overall" findMax={findMax} />
+        <ComparisonTable title="Performance by Model" titleRight={promptSelector} rows={modelComparison} primaryColumn="name" secondaryColumn="prompt" highlightKey="Relevance" overallKey="Overall" findMax={findMax} />
+        <ComparisonTable title="Performance by Version" titleRight={promptSelector} rows={versionComparison} primaryColumn="name" secondaryColumn="prompt" highlightKey="Correctness" overallKey="Overall" findMax={findMax} />
       </div>
     </div>
   );
 }
 
-function ComparisonTable({ title, rows, primaryColumn, secondaryColumn, highlightKey, overallKey, findMax }) {
+function ComparisonTable({ title, titleRight, rows, primaryColumn, secondaryColumn, highlightKey, overallKey, findMax }) {
   return (
     <div className="space-y-4">
-      <h3 className="ml-1 text-sm font-bold uppercase tracking-[0.2em] text-text-muted">{title}</h3>
+      <div className="flex items-center justify-between ml-1">
+        <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-text-muted">{title}</h3>
+        {titleRight}
+      </div>
       <div className="overflow-hidden rounded-xl border border-border bg-panel/30">
         <table className="w-full text-left text-sm">
           <thead>
