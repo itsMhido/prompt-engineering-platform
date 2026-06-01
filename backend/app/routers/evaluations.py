@@ -37,6 +37,7 @@ class BatchRunRequest(BaseModel):
     rowLimit: Union[int, str] = "all"
     variableMapping: dict
     delayMs: int = 300
+    batchName: Optional[str] = None
 
 
 def parse_score_response(text: str) -> dict:
@@ -289,7 +290,7 @@ async def batch_run_evaluation(
     limit = len(all_rows) if request.rowLimit == "all" else int(request.rowLimit)
     rows_to_process = all_rows[:limit]
     batch_id = str(uuid4())
-    batch_name = f"{prompt.name} / {dataset.name} / {model.name}"
+    batch_name = request.batchName if request.batchName else f"{prompt.name} / {dataset.name} / {model.name}"
     
     # 4. Process each row sequentially
     experiments = []

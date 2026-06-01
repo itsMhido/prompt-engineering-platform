@@ -24,6 +24,8 @@ class RunRequest(BaseModel):
     variableValues: Optional[dict] = {}
     datasetId: Optional[str] = None
     datasetRowIndex: Optional[int] = None
+    batchId: Optional[str] = None
+    batchName: Optional[str] = None
 
 @router.post("/run", response_model=dict)
 async def run_inference(
@@ -64,7 +66,9 @@ async def run_inference(
         variable_values=request.variableValues or {},
         interpolated_prompt=request.userMessage,
         dataset_id=request.datasetId or None,
-        dataset_row_index=request.datasetRowIndex
+        dataset_row_index=request.datasetRowIndex,
+        batch_id=request.batchId,
+        batch_name=request.batchName
     )
 
     return {

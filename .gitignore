@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 *.local
+lab-devops.txt
+project-report.txt
 
 # Editor directories and files
 .vscode/*

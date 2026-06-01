@@ -10,6 +10,18 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.experiment import Experiment
 from app.models.user import User
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pydantic import BaseModel
+from sqlalchemy import func, cast, Text, or_, Integer
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.models.experiment import Experiment
+from app.models.user import User
 from app.core.auth import get_current_user, get_user_workspace
 from app.schemas.experiment import ExperimentCreate, ExperimentUpdate, ExperimentRead
 
@@ -18,6 +30,10 @@ router = APIRouter()
 
 class BulkDeleteRequest(BaseModel):
     ids: list[str]
+
+
+class RenameBatchRequest(BaseModel):
+    name: str
 
 
 def format_experiment(exp: Experiment) -> dict:
@@ -122,6 +138,21 @@ def get_batches(
 
     result.sort(key=lambda batch: batch["createdAt"] or "", reverse=True)
     return { "batches": result }
+
+@router.patch("/batches/{batch_id}")
+def rename_batch(
+    batch_id: str,
+    body: RenameBatchRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    workspace = get_user_workspace(current_user, db)
+    db.query(Experiment).filter(
+        Experiment.batch_id == batch_id,
+        Experiment.workspace_id == workspace.id
+    ).update({"batch_name": body.name})
+    db.commit()
+    return { "ok": True }
 
 @router.get("")
 def list_experiments(

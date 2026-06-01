@@ -412,3 +412,11 @@ export async function listBatches() {
   const data = await fetchJson('/api/experiments/batches');
   return data.batches || [];
 }
+
+export async function renameBatch(batchId, name) {
+  const data = await fetchJson(`/api/experiments/batches/${batchId}`, {
+    method: 'PATCH',
+    body: { name }
+  });
+  return data;
+}

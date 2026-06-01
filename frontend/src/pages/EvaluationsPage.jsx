@@ -16,7 +16,8 @@ import {
   runBatchEvaluation,
   runPrompt,
   scoreEvaluation,
-  updateExperiment
+  updateExperiment,
+  renameBatch
 } from '../utils/api';
 
 const METRICS = ['Relevance', 'Correctness', 'Toxicity', 'Fluency'];
@@ -331,92 +332,207 @@ function StatCard({ label, value, icon, color = 'text-text-main', highlight = fa
   );
 }
 
-function ComparisonView({ experiments, datasets, onUpdateExperiment, setActiveTab }) {
-  const [selectedDatasetId, setSelectedDatasetId] = useState('all');
-  const [expAId, setExpAId] = useState('');
-  const [expBId, setExpBId] = useState('');
+const buildComparisonRows = (experimentsA, experimentsB) => {
+  const maxRows = Math.max(experimentsA.length, experimentsB.length);
+  return Array.from({ length: maxRows }, (_, i) => ({
+    index: i,
+    expA: experimentsA[i] || null,
+    expB: experimentsB[i] || null
+  }));
+};
+
+function ComparisonView({ setActiveTab }) {
+  const [batchA, setBatchA] = useState(null);
+  const [batchB, setBatchB] = useState(null);
+  const [batches, setBatches] = useState([]);
+  const [comparisonRows, setComparisonRows] = useState([]);
+  const [experimentsA, setExperimentsA] = useState([]);
+  const [experimentsB, setExperimentsB] = useState([]);
 
   useEffect(() => {
-    if (experiments.length > 0 && !expAId) {
-      setExpAId(experiments[0].id);
-      setExpBId(experiments[1]?.id || experiments[0].id);
-    }
-  }, [experiments, expAId]);
+    listBatches().then(setBatches).catch(console.error);
+  }, []);
 
-  const uniqueDatasetIds = useMemo(() => Array.from(new Set(experiments.map((experiment) => experiment.datasetId).filter(Boolean))), [experiments]);
+  useEffect(() => {
+    if (!batchA || !batchB) return;
+    Promise.all([
+      listExperiments({ batchId: batchA.batchId }),
+      listExperiments({ batchId: batchB.batchId })
+    ]).then(([resA, resB]) => {
+      setExperimentsA(resA);
+      setExperimentsB(resB);
+      setComparisonRows(buildComparisonRows(resA, resB));
+    });
+  }, [batchA, batchB]);
 
-  const filteredExperiments = useMemo(() => {
-    if (selectedDatasetId === 'all') {
-      return experiments;
-    }
-    return experiments.filter((experiment) => experiment.datasetId === selectedDatasetId);
-  }, [experiments, selectedDatasetId]);
+  const getScoreColor = (score) => {
+    if (score == null) return 'var(--text-muted)';
+    if (score > 70) return '#88d273';
+    if (score > 40) return '#e8a847';
+    return '#ff6b6b';
+  };
 
-  const expA = useMemo(() => experiments.find((experiment) => experiment.id === expAId), [experiments, expAId]);
-  const expB = useMemo(() => experiments.find((experiment) => experiment.id === expBId), [experiments, expBId]);
-
-  const winnerInfo = useMemo(() => {
-    if (!expA || !expB || expA.id === expB.id) {
-      return null;
-    }
-
-    const scoresA = Object.values(expA.scores || {});
-    const scoresB = Object.values(expB.scores || {});
-    if (scoresA.length === 0 || scoresB.length === 0) {
-      return null;
-    }
-
-    const avgA = scoresA.reduce((sum, value) => sum + value, 0) / scoresA.length;
-    const avgB = scoresB.reduce((sum, value) => sum + value, 0) / scoresB.length;
-    if (avgA === avgB) {
-      return 'tie';
-    }
-    return avgA > avgB ? 'a' : 'b';
-  }, [expA, expB]);
-
-  if (experiments.length === 0) {
-    return <EvalEmptyState setActiveTab={setActiveTab} />;
-  }
+  const formatRelativeTime = (isoString) => timeAgo(isoString);
 
   return (
     <div className="flex h-full flex-col overflow-y-auto p-8 animate-in fade-in duration-300">
-      <div className="mb-8 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium uppercase tracking-wider text-text-muted">Filter by Dataset:</span>
-          <select value={selectedDatasetId} onChange={(e) => setSelectedDatasetId(e.target.value)} className="cursor-pointer rounded-md border border-border bg-panel px-3 py-1.5 text-sm text-text-main transition-colors focus:border-primary focus:outline-none">
-            <option value="all">All Experiments</option>
-            {uniqueDatasetIds.map((id) => {
-              const dataset = datasets.find((item) => item.id === id);
-              return <option key={id} value={id}>{dataset ? dataset.name : `Dataset ${id}`}</option>;
-            })}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 16, alignItems: 'center', marginBottom: 24, flexShrink: 0 }}>
+        <div>
+          <label style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
+            BATCH A
+          </label>
+          <select
+            value={batchA?.batchId || ''}
+            onChange={e => setBatchA(batches.find(b => b.batchId === e.target.value) || null)}
+            style={{ wIdth: '100%', background: '#161613', border: '1px solid #252320', borderRadius: 6, padding: '8px 12px', color: '#f0ece4', fontSize: 13 }}
+          >
+            <option value="">Select a batch run...</option>
+            {batches.map(b => (
+              <option key={b.batchId} value={b.batchId} disabled={b.batchId === batchB?.batchId}>
+                {b.batchName} · {b.successCount}/{b.rowCount} rows · {formatRelativeTime(b.createdAt)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ textAlign: 'center', fontFamily: 'monospace', fontSize: 12, color: 'var(--text-muted)', paddingTop: 20 }}>
+          vs
+        </div>
+
+        <div>
+          <label style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--text-muted)', display: 'block', marginBottom: 6 }}>
+            BATCH B
+          </label>
+          <select
+            value={batchB?.batchId || ''}
+            onChange={e => setBatchB(batches.find(b => b.batchId === e.target.value) || null)}
+            style={{ width: '100%', background: '#161613', border: '1px solid #252320', borderRadius: 6, padding: '8px 12px', color: '#f0ece4', fontSize: 13 }}
+          >
+            <option value="">Select a batch run...</option>
+            {batches.map(b => (
+              <option key={b.batchId} value={b.batchId} disabled={b.batchId === batchA?.batchId}>
+                {b.batchName} · {b.successCount}/{b.rowCount} rows · {formatRelativeTime(b.createdAt)}
+              </option>
+            ))}
           </select>
         </div>
       </div>
 
-      <div className="mb-8 grid grid-cols-2 gap-6 shrink-0">
-        <Selector label="Experiment A" value={expAId} onChange={setExpAId} experiments={filteredExperiments} />
-        <Selector label="Experiment B" value={expBId} onChange={setExpBId} experiments={filteredExperiments} />
-      </div>
+      {!batchA && !batchB && (
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)' }}>
+          <div style={{ fontSize: 32, marginBottom: 12 }}>⚖</div>
+          <div style={{ fontSize: 15, marginBottom: 8, color: 'var(--text-main)' }}>Select two batch runs to compare</div>
+          <div style={{ fontSize: 13 }}>
+            Run batches with different models or prompt versions, then compare them here side by side.
+          </div>
+        </div>
+      )}
 
-      <div className="grid flex-1 grid-cols-2 gap-6">
-        <EvalPanel exp={expA} isWinner={winnerInfo === 'a'} isTie={winnerInfo === 'tie'} onUpdateScore={(metric, value) => onUpdateExperiment({ ...expA, scores: { ...(expA.scores || {}), [metric]: value } })} />
-        <EvalPanel exp={expB} isWinner={winnerInfo === 'b'} isTie={winnerInfo === 'tie'} onUpdateScore={(metric, value) => onUpdateExperiment({ ...expB, scores: { ...(expB.scores || {}), [metric]: value } })} />
-      </div>
-    </div>
-  );
-}
+      {batchA && batchB && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 24, flexShrink: 0 }}>
+          {[batchA, batchB].map((batch, idx) => {
+            const exps = idx === 0 ? experimentsA : experimentsB;
+            const avgOverall = exps
+              .filter(e => e.score != null)
+              .reduce((sum, e) => sum + e.score, 0) /
+              (exps.filter(e => e.score != null).length || 1);
 
-function Selector({ label, value, onChange, experiments }) {
-  return (
-    <div className="space-y-2">
-      <label className="ml-1 text-[10px] font-bold uppercase tracking-[0.2em] text-text-muted">{label}</label>
-      <select value={value} onChange={(e) => onChange(e.target.value)} className="w-full cursor-pointer appearance-none rounded-lg border border-border bg-panel px-4 py-3 text-sm text-text-main transition-all focus:outline-none focus:ring-1 focus:ring-primary/50">
-        {experiments.map((experiment) => (
-          <option key={experiment.id} value={experiment.id}>
-            {experiment.promptName || 'Unknown Prompt'} · {experiment.promptVersion} · {experiment.provider} · {experiment.modelName || experiment.model}
-          </option>
+            return (
+              <div key={batch.batchId} style={{
+                padding: 16, background: '#161613',
+                border: '1px solid #252320', borderRadius: 8
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: 4, color: 'var(--text-main)' }}>{batch.batchName}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
+                  {batch.successCount} successful · {batch.rowCount} total · {formatRelativeTime(batch.createdAt)}
+                </div>
+                <div style={{ display: 'flex', gap: 16 }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>AVG OVERALL</div>
+                    <div style={{ fontSize: 18, fontWeight: 600, color: getScoreColor(avgOverall) }}>
+                      {avgOverall > 0 ? `${Math.round(avgOverall)}%` : '--'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {comparisonRows.map(({ index, expA, expB }) => (
+          <div key={index} style={{
+            display: 'grid', gridTemplateColumns: '1fr 1fr',
+            gap: 16, marginBottom: 16,
+            padding: 16, background: '#161613',
+            border: '1px solid #252320', borderRadius: 8
+          }}>
+            <div style={{ gridColumn: '1 / -1', fontSize: 11, color: 'var(--text-muted)', marginBottom: 8, fontFamily: 'monospace' }}>
+              ROW {index + 1}
+              {expA?.variableValues && (
+                <span style={{ marginLeft: 8 }}>
+                  {Object.entries(expA.variableValues).map(([k, v]) => `${k}=${v}`).join(' · ')}
+                </span>
+              )}
+            </div>
+
+            {[expA, expB].map((exp, side) => (
+              <div key={side}>
+                {exp ? (
+                  <>
+                    <div style={{
+                      background: '#0f0f0d', border: '1px solid #252320',
+                      borderRadius: 6, padding: '10px 12px',
+                      fontSize: 12, lineHeight: 1.6, marginBottom: 10,
+                      maxHeight: 120, overflowY: 'auto',
+                      fontFamily: 'IBM Plex Mono, monospace',
+                      color: 'var(--text-main)'
+                    }}>
+                      {exp.output || 'No output'}
+                    </div>
+                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                      {exp.scores && Object.entries(exp.scores).map(([metric, score]) => (
+                        <div key={metric}>
+                          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{metric} </span>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: getScoreColor(score) }}>
+                            {score != null && score >= 0 ? score : '--'}
+                          </span>
+                        </div>
+                      ))}
+                      {exp.score != null && (
+                        <div>
+                          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Overall </span>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: getScoreColor(exp.score) }}>
+                            {Math.round(exp.score)}%
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                    {expA?.score != null && expB?.score != null && (
+                      <div style={{ marginTop: 6, fontSize: 11 }}>
+                        {side === 0 && expA.score > expB.score && (
+                          <span style={{ color: '#88d273' }}>▲ Better by {Math.round(expA.score - expB.score)}%</span>
+                        )}
+                        {side === 1 && expB.score > expA.score && (
+                          <span style={{ color: '#88d273' }}>▲ Better by {Math.round(expB.score - expA.score)}%</span>
+                        )}
+                        {expA.score === expB.score && (
+                          <span style={{ color: 'var(--text-muted)' }}>= Tied</span>
+                        )}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ color: 'var(--text-muted)', fontSize: 12, padding: 12 }}>
+                    No matching row in this batch
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         ))}
-      </select>
+      </div>
     </div>
   );
 }
@@ -445,6 +561,10 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
   const [newBatchPromptId, setNewBatchPromptId] = useState('');
   const [newBatchVersionId, setNewBatchVersionId] = useState('');
   const [newBatchModelId, setNewBatchModelId] = useState('');
+  const [newBatchName, setNewBatchName] = useState('');
+  const [hoveredBatch, setHoveredBatch] = useState(null);
+  const [renamingBatch, setRenamingBatch] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
   const [varMappings, setVarMappings] = useState({});
   const [rowLimit, setRowLimit] = useState('all');
   const [batchResult, setBatchResult] = useState(null);
@@ -610,6 +730,9 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
       setBatchProgress(prev => ({ ...prev, total: rowsToProcess.length }));
       const newExperiments = [];
 
+      const batchId = crypto.randomUUID();
+      const finalBatchName = newBatchName || `${promptVersions.find(v => v.id === newBatchVersionId)?.promptName || 'Prompt'} / ${dataset?.name || 'Dataset'} / ${selectedModel?.name || 'Model'}`;
+
       for (let i = 0; i < rowsToProcess.length; i++) {
         if (cancelRef.current) break;
 
@@ -641,7 +764,9 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
             userTemplate: version.userTemplate,
             variableValues,
             datasetId: newBatchDatasetId,
-            datasetRowIndex: i
+            datasetRowIndex: i,
+            batchId,
+            batchName: finalBatchName
           });
 
           if (result.experiment) {
@@ -819,6 +944,30 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
               </div>
 
               <div className="pt-4">
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{
+                    fontSize: 11, fontFamily: 'monospace',
+                    letterSpacing: '0.08em', color: 'var(--text-muted)',
+                    display: 'block', marginBottom: 6
+                  }}>
+                    BATCH NAME (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={newBatchName}
+                    onChange={e => setNewBatchName(e.target.value)}
+                    placeholder="e.g. Groq baseline, Gemini test run..."
+                    style={{
+                      width: '100%', background: '#0f0f0d',
+                      border: '1px solid #252320', borderRadius: 6,
+                      padding: '8px 12px', color: '#f0ece4', fontSize: 13
+                    }}
+                  />
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
+                    Leave blank to auto-generate from prompt · model · date
+                  </span>
+                </div>
+
                 <button
                   onClick={handleRunNewBatch}
                   disabled={!newBatchDatasetId || !newBatchPromptId || !newBatchVersionId || !newBatchModelId || batchProgress.isRunning}
@@ -908,35 +1057,91 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
                   BATCH RUN
                 </label>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {batches.map(batch => (
-                    <button
-                      key={batch.batchId}
-                      onClick={() => setSelectedBatchId(batch.batchId)}
-                      style={{
-                        padding: '6px 12px',
-                        borderRadius: 6,
-                        border: selectedBatchId === batch.batchId
-                          ? '1px solid #88d273'
-                          : '1px solid var(--border)',
-                        background: selectedBatchId === batch.batchId
-                          ? 'rgba(136, 210, 115, 0.1)'
-                          : 'transparent',
-                        color: selectedBatchId === batch.batchId ? '#88d273' : 'var(--text-muted)',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                        borderStyle: batch.batchId === 'ungrouped' ? 'dashed' : 'solid',
-                        opacity: batch.batchId === 'ungrouped' ? 0.7 : 1
-                      }}
-                    >
-                      <span>{batch.batchName}</span>
-                      <span style={{ marginLeft: 8, opacity: 0.6 }}>
-                        {batch.successCount}/{batch.rowCount} runs
-                      </span>
-                      <span style={{ marginLeft: 8, opacity: 0.5, fontSize: 11 }}>
-                        {timeAgo(batch.createdAt)}
-                      </span>
-                    </button>
-                  ))}
+                  {batches.map(batch => {
+                    const isSelected = selectedBatchId === batch.batchId;
+                    const isHovered = hoveredBatch === batch.batchId;
+                    const isRenaming = renamingBatch?.batchId === batch.batchId;
+                    
+                    if (isRenaming) {
+                      return (
+                        <input
+                          key={`rename-${batch.batchId}`}
+                          autoFocus
+                          value={renameValue}
+                          onChange={e => setRenameValue(e.target.value)}
+                          onKeyDown={async e => {
+                            if (e.key === 'Enter') {
+                              try {
+                                await renameBatch(batch.batchId, renameValue);
+                                setBatches(prev => prev.map(b =>
+                                  b.batchId === batch.batchId
+                                    ? { ...b, batchName: renameValue }
+                                    : b
+                                ));
+                              } catch (err) {
+                                console.error('Failed to rename batch', err);
+                              }
+                              setRenamingBatch(null);
+                            }
+                            if (e.key === 'Escape') setRenamingBatch(null);
+                          }}
+                          onBlur={() => setRenamingBatch(null)}
+                          style={{
+                            fontSize: 12, background: '#0f0f0d',
+                            border: '1px solid #88d273', borderRadius: 4,
+                            padding: '3px 8px', color: '#f0ece4'
+                          }}
+                        />
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={batch.batchId}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                        onMouseEnter={() => setHoveredBatch(batch.batchId)}
+                        onMouseLeave={() => setHoveredBatch(null)}
+                      >
+                        <button
+                          onClick={() => setSelectedBatchId(batch.batchId)}
+                          style={{
+                            padding: '6px 12px',
+                            borderRadius: 6,
+                            border: isSelected ? '1px solid #88d273' : '1px solid var(--border)',
+                            background: isSelected ? 'rgba(136, 210, 115, 0.1)' : 'transparent',
+                            color: isSelected ? '#88d273' : 'var(--text-muted)',
+                            cursor: 'pointer',
+                            fontSize: 12,
+                            borderStyle: batch.batchId === 'ungrouped' ? 'dashed' : 'solid',
+                            opacity: batch.batchId === 'ungrouped' ? 0.7 : 1
+                          }}
+                        >
+                          <span>{batch.batchName}</span>
+                          <span style={{ marginLeft: 8, opacity: 0.6 }}>
+                            {batch.successCount}/{batch.rowCount} runs
+                          </span>
+                          <span style={{ marginLeft: 8, opacity: 0.5, fontSize: 11 }}>
+                            {timeAgo(batch.createdAt)}
+                          </span>
+                        </button>
+                        {isHovered && batch.batchId !== 'ungrouped' && (
+                          <button
+                            onClick={() => {
+                              setRenamingBatch(batch);
+                              setRenameValue(batch.batchName);
+                            }}
+                            style={{
+                              fontSize: 10, padding: '2px 6px',
+                              border: '1px solid #252320', borderRadius: 3,
+                              background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer'
+                            }}
+                          >
+                            ✏
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
 
                 {batches.length === 0 && (
