@@ -3,6 +3,10 @@ import random
 import httpx
 from typing import Callable, Any
 
+class ParseError(Exception):
+    """Raised when the model response cannot be parsed into expected format"""
+    pass
+
 class RateLimitError(Exception):
     """Raised when a provider returns a rate limit response"""
     def __init__(self, message: str, retry_after: float = None):
@@ -33,14 +37,14 @@ async def with_exponential_backoff(
         try:
             return await func()
             
-        except RateLimitError as e:
+        except (RateLimitError, ParseError) as e:
             last_error = e
             
             if attempt == max_retries:
                 raise
                 
             # Use provider's retry-after if available, otherwise exponential backoff
-            if e.retry_after:
+            if hasattr(e, 'retry_after') and e.retry_after:
                 delay = min(e.retry_after, max_delay)
             else:
                 delay = min(base_delay * (2 ** attempt), max_delay)
@@ -48,7 +52,7 @@ async def with_exponential_backoff(
             if jitter:
                 delay = delay * (0.5 + random.random() * 0.5)
                 
-            print(f"Rate limited. Attempt {attempt + 1}/{max_retries}. Retrying in {delay:.1f}s...")
+            print(f"{type(e).__name__}. Attempt {attempt + 1}/{max_retries}. Retrying in {delay:.1f}s...")
             await asyncio.sleep(delay)
             
         except Exception as e:
