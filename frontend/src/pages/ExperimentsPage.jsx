@@ -62,6 +62,12 @@ export default function ExperimentsView() {
     return '#ff6b6b';
   };
 
+  const renderScore = (score) => {
+    if (score === null || score === undefined) return '--';
+    if (score < 0) return '--';   // legacy -1 values
+    return score;
+  };
+
   useEffect(() => {
     (async () => {
       try {
@@ -611,6 +617,25 @@ export default function ExperimentsView() {
                   </button>
                 </div>
 
+                {detailedExperiment?.expectedOutputUsed && (
+                  <div style={{
+                    fontSize: 11, color: '#88d273',
+                    marginBottom: 12, display: 'flex',
+                    alignItems: 'center', gap: 4
+                  }}>
+                    <span>✓</span>
+                    <span>Scored against expected output from dataset</span>
+                  </div>
+                )}
+                {!detailedExperiment?.expectedOutputUsed && detailedExperiment?.datasetId && (
+                  <div style={{
+                    fontSize: 11, color: 'var(--muted)',
+                    marginBottom: 12
+                  }}>
+                    ⚠ No expected output column found in dataset — Correctness scored without reference
+                  </div>
+                )}
+
                 {detailedExperiment.score != null && (
                   <div style={{ marginBottom: 24 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -656,7 +681,7 @@ export default function ExperimentsView() {
                           )}
                         </div>
                         <span style={{ fontSize: 12, fontWeight: 500, color: getScoreColor(score) }}>
-                          {score != null && score >= 0 ? score : 'failed'}
+                          {renderScore(score)}
                         </span>
                       </div>
                       <div style={{ height: 4, background: '#252320', borderRadius: 2 }}>
