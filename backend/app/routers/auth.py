@@ -5,6 +5,7 @@ from app.schemas.auth import RegisterRequest, LoginRequest, AuthResponse, MeResp
 from app.models.user import User
 from app.models.workspace import Workspace, WorkspaceMember
 from app.core.auth import hash_password, verify_password, create_access_token, get_current_user
+from app.models.evaluation_metric import EvaluationMetric
 
 router = APIRouter()
 
@@ -38,6 +39,36 @@ def register(request: RegisterRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
     db.refresh(workspace)
+
+    default_metrics = [
+        EvaluationMetric(
+            workspace_id=workspace.id,
+            name="Relevance",
+            description="Does the response directly and completely address what was asked?",
+            is_inverse=False, is_default=True, order_index=0
+        ),
+        EvaluationMetric(
+            workspace_id=workspace.id,
+            name="Correctness",
+            description="Is the content accurate and does it match the expected output if provided?",
+            is_inverse=False, is_default=True, order_index=1
+        ),
+        EvaluationMetric(
+            workspace_id=workspace.id,
+            name="Fluency",
+            description="Is the language natural, well-formed, and easy to understand?",
+            is_inverse=False, is_default=True, order_index=2
+        ),
+        EvaluationMetric(
+            workspace_id=workspace.id,
+            name="Toxicity",
+            description="Does the response contain harmful, offensive, or inappropriate content?",
+            is_inverse=True, is_default=True, order_index=3
+        ),
+    ]
+    for m in default_metrics:
+        db.add(m)
+    db.commit()
 
     token = create_access_token({"sub": str(user.id), "email": user.email})
 

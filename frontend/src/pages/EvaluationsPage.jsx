@@ -17,12 +17,11 @@ import {
   runPrompt,
   scoreEvaluation,
   updateExperiment,
-  renameBatch
+  renameBatch,
+  getMetrics
 } from '../utils/api';
 
-const METRICS = ['Relevance', 'Correctness', 'Toxicity', 'Fluency'];
-
-function buildGroupedScores(experiments, key) {
+function buildGroupedScores(experiments, key, metricNames) {
   const groups = {};
   experiments.forEach((experiment) => {
     const value = experiment[key] || 'Unknown';
@@ -42,7 +41,7 @@ function buildGroupedScores(experiments, key) {
     groups[value].runs += 1;
     let rowTotal = 0;
     let count = 0;
-    METRICS.forEach((metric) => {
+    metricNames.forEach((metric) => {
       if (experiment.scores[metric] !== undefined) {
         groups[value][metric] += experiment.scores[metric];
         groups[value].counts[metric] += 1;
@@ -70,23 +69,26 @@ export default function EvaluationsPage() {
   const [datasets, setDatasets] = useState([]);
   const [models, setModels] = useState([]);
   const [prompts, setPrompts] = useState([]);
+  const [workspaceMetrics, setWorkspaceMetrics] = useState([]);
   const [datasetDetails, setDatasetDetails] = useState({});
   const [error, setError] = useState('');
 
   useEffect(() => {
     (async () => {
       try {
-        const [loadedExperiments, loadedDatasets, loadedModels, loadedPrompts] = await Promise.all([
+        const [loadedExperiments, loadedDatasets, loadedModels, loadedPrompts, metricsRes] = await Promise.all([
           listExperiments(),
           listDatasets(),
           listModels(),
-          listPrompts()
+          listPrompts(),
+          getMetrics()
         ]);
 
         setExperiments(loadedExperiments);
         setDatasets(loadedDatasets);
         setModels(loadedModels);
         setPrompts(loadedPrompts);
+        setWorkspaceMetrics(metricsRes.metrics || []);
       } catch (err) {
         setError(err.message || 'Failed to load evaluations data.');
       }
@@ -146,7 +148,7 @@ export default function EvaluationsPage() {
 
       <div className="flex-1 overflow-hidden">
         {activeTab === 'overview' ? (
-          <OverviewView experiments={experiments} prompts={prompts} setActiveTab={setActiveTab} />
+          <OverviewView experiments={experiments} prompts={prompts} setActiveTab={setActiveTab} workspaceMetrics={workspaceMetrics} />
         ) : activeTab === 'comparison' ? (
           <ComparisonView experiments={experiments} datasets={datasets} onUpdateExperiment={handleUpdateExperiment} setActiveTab={setActiveTab} />
         ) : (
@@ -160,6 +162,7 @@ export default function EvaluationsPage() {
             fetchDatasetDetail={fetchDatasetDetail}
             onExperimentsAdded={(newExperiments) => setExperiments((prev) => [...newExperiments, ...prev])}
             onUpdateExperiment={handleUpdateExperiment}
+            workspaceMetrics={workspaceMetrics}
           />
         )}
       </div>
@@ -181,8 +184,9 @@ function TabButton({ active, onClick, icon, children }) {
   );
 }
 
-function OverviewView({ experiments, prompts, setActiveTab }) {
+function OverviewView({ experiments, prompts, setActiveTab, workspaceMetrics }) {
   const [selectedPromptId, setSelectedPromptId] = useState('all');
+  const metricNames = workspaceMetrics.map(m => m.name);
 
   const scoredExperiments = useMemo(() => experiments.filter((experiment) => experiment.scores && Object.keys(experiment.scores).length > 0), [experiments]);
 
@@ -195,7 +199,7 @@ function OverviewView({ experiments, prompts, setActiveTab }) {
     scoredExperiments.forEach((experiment) => {
       let rowTotal = 0;
       let count = 0;
-      METRICS.forEach((metric) => {
+      metricNames.forEach((metric) => {
         if (experiment.scores[metric] !== undefined) {
           averages[metric] = (averages[metric] || 0) + experiment.scores[metric];
           rowTotal += experiment.scores[metric];
@@ -214,21 +218,21 @@ function OverviewView({ experiments, prompts, setActiveTab }) {
       avgToxicity: averages.Toxicity != null ? (averages.Toxicity / (scoredExperiments.filter((experiment) => experiment.scores.Toxicity !== undefined).length || 1)).toFixed(1) : '0.0',
       avgOverall: averages.Overall != null && scoredExperiments.length > 0 ? (averages.Overall / scoredExperiments.length).toFixed(1) : '0.0'
     };
-  }, [scoredExperiments]);
+  }, [scoredExperiments, metricNames]);
 
   const modelComparison = useMemo(() => {
     const filtered = selectedPromptId === 'all' 
       ? scoredExperiments 
       : scoredExperiments.filter(e => e.promptId === selectedPromptId);
-    return buildGroupedScores(filtered, 'modelName');
-  }, [scoredExperiments, selectedPromptId]);
+    return buildGroupedScores(filtered, 'modelName', metricNames);
+  }, [scoredExperiments, selectedPromptId, metricNames]);
 
   const versionComparison = useMemo(() => {
     const filtered = selectedPromptId === 'all' 
       ? scoredExperiments 
       : scoredExperiments.filter(e => e.promptId === selectedPromptId);
-    return buildGroupedScores(filtered, 'promptVersion');
-  }, [scoredExperiments, selectedPromptId]);
+    return buildGroupedScores(filtered, 'promptVersion', metricNames);
+  }, [scoredExperiments, selectedPromptId, metricNames]);
 
   if (scoredExperiments.length === 0) {
     return (
@@ -537,7 +541,9 @@ function ComparisonView({ setActiveTab }) {
   );
 }
 
-function BatchEvalView({ initialViewMode = 'existing', experiments, setExperiments, datasets, models, prompts, fetchDatasetDetail, onExperimentsAdded, onUpdateExperiment }) {
+function BatchEvalView({ initialViewMode = 'existing', experiments, setExperiments, datasets, models, prompts, fetchDatasetDetail, onExperimentsAdded, onUpdateExperiment, workspaceMetrics }) {
+  const metricNames = workspaceMetrics.map(m => m.name);
+  const inverseMetrics = workspaceMetrics.filter(m => m.isInverse).map(m => m.name);
   const [viewMode, setViewMode] = useState(initialViewMode);
   
   useEffect(() => {
@@ -647,13 +653,11 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
     return selectedBatchId ? batchExperiments : experiments;
   }, [batchExperiments, experiments, selectedBatchId]);
 
-  // Compute per-row overall from actual scores (excluding Toxicity)
-  const INVERSE_METRICS = ['Toxicity'];
-
+  // Compute per-row overall from actual scores
   const getOverall = (experiment) => {
     if (!experiment.scores || Object.keys(experiment.scores).length === 0) return null;
     const scoreable = Object.entries(experiment.scores)
-      .filter(([metric]) => !INVERSE_METRICS.includes(metric))
+      .filter(([metric]) => !inverseMetrics.includes(metric))
       .map(([, score]) => score)
       .filter(s => s != null && typeof s === 'number' && s >= 0);
     if (scoreable.length === 0) return null;
@@ -670,10 +674,10 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
     scoredExperiments.forEach((experiment) => {
       let rowTotal = 0;
       let count = 0;
-      METRICS.forEach((metric) => {
+      metricNames.forEach((metric) => {
         if (experiment.scores[metric] !== undefined) {
-          totals[metric] += experiment.scores[metric];
-          if (metric !== 'Toxicity') {
+          totals[metric] = (totals[metric] || 0) + experiment.scores[metric];
+          if (!inverseMetrics.includes(metric)) {
             rowTotal += experiment.scores[metric];
             count += 1;
           }
@@ -1171,7 +1175,7 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
             {summary && (
               <div className="flex items-center justify-between rounded-xl border border-border bg-panel/50 p-4 shadow-sm">
                 <div className="flex gap-8">
-                  {METRICS.map((metric) => (
+                  {metricNames.slice(0, 4).map((metric) => (
                     <div key={metric} className="flex flex-col gap-1">
                       <span className="text-[10px] font-bold uppercase tracking-tighter text-text-muted">{metric}</span>
                       <span className={cn('font-mono text-lg font-bold', parseFloat(summary[metric]) > 80 ? 'text-primary' : 'text-text-main')}>
@@ -1220,7 +1224,7 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
                   <th className="w-12 px-4 py-4 text-center text-[10px] font-bold uppercase tracking-widest text-text-muted">#</th>
                   <th className="px-4 py-4 text-[10px] font-bold uppercase tracking-widest text-text-muted">Input Variables</th>
                   <th className="w-1/4 px-4 py-4 text-[10px] font-bold uppercase tracking-widest text-text-muted">Output</th>
-                  {METRICS.slice(0, 2).map((metric) => (
+                  {metricNames.slice(0, 2).map((metric) => (
                     <th key={metric} className="w-24 px-4 py-4 text-center text-[10px] font-bold uppercase tracking-widest text-text-muted">{metric}</th>
                   ))}
                   <th className="w-32 px-4 py-4 text-center text-[10px] font-bold uppercase tracking-widest text-text-muted">Overall</th>
@@ -1285,7 +1289,7 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
                             </div>
                           )}
                         </td>
-                        {METRICS.slice(0, 2).map((metric) => (
+                        {metricNames.slice(0, 2).map((metric) => (
                           <td key={metric} className="px-4 py-4 text-center font-mono text-xs font-bold">
                             {renderScore(experiment.scores?.[metric])}
                           </td>
@@ -1331,7 +1335,7 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
                                     <Settings size={12} /> Detailed Scoring
                                   </label>
                                   <div className="grid grid-cols-2 gap-x-8 gap-y-4">
-                                    {METRICS.map((metric) => (
+                                    {metricNames.map((metric) => (
                                       <ScoreBar key={metric} label={metric} score={experiment.scores?.[metric]} />
                                     ))}
                                   </div>
@@ -1360,6 +1364,7 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
           activeModels={models.filter(m => m.status === 'active')}
           onCancel={() => setIsAIScoringOpen(false)}
           onConfirm={handleRunAIScoring}
+          workspaceMetrics={workspaceMetrics}
         />
       )}
     </div>
@@ -1401,8 +1406,9 @@ function FilterField({ label, value, onChange, options }) {
   );
 }
 
-function AIScoringModal({ dataset, activeModels, onCancel, onConfirm }) {
-  const [selectedMetrics, setSelectedMetrics] = useState(['Relevance', 'Correctness']);
+function AIScoringModal({ dataset, activeModels, onCancel, onConfirm, workspaceMetrics }) {
+  const defaultMetrics = workspaceMetrics.filter(m => m.isDefault).map(m => m.name);
+  const [selectedMetrics, setSelectedMetrics] = useState(defaultMetrics.length ? defaultMetrics : workspaceMetrics.map(m => m.name));
   const [expectedOutputCol, setExpectedOutputCol] = useState('');
   const [scorerModelId, setScorerModelId] = useState(() => activeModels.length > 0 ? activeModels[0].id : '');
 
@@ -1444,10 +1450,10 @@ function AIScoringModal({ dataset, activeModels, onCancel, onConfirm }) {
           <div>
             <label className="mb-3 block text-[10px] font-bold uppercase tracking-widest text-text-muted">Select Metrics to Score</label>
             <div className="grid grid-cols-2 gap-3">
-              {METRICS.map((metric) => (
-                <button key={metric} onClick={() => toggleMetric(metric)} className={cn('flex items-center justify-between rounded-lg border p-3 text-xs font-medium transition-all', selectedMetrics.includes(metric) ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border bg-background text-text-muted hover:border-primary/30')}>
-                  {metric}
-                  {selectedMetrics.includes(metric) && <CheckCircle2 size={14} />}
+              {workspaceMetrics.map((metric) => (
+                <button key={metric.name} onClick={() => toggleMetric(metric.name)} className={cn('flex items-center justify-between rounded-lg border p-3 text-xs font-medium transition-all', selectedMetrics.includes(metric.name) ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border bg-background text-text-muted hover:border-primary/30')}>
+                  {metric.name}
+                  {selectedMetrics.includes(metric.name) && <CheckCircle2 size={14} />}
                 </button>
               ))}
             </div>
@@ -1541,7 +1547,7 @@ function EvalPanel({ exp, isWinner, isTie, onUpdateScore }) {
           <div className="mb-2 flex items-center justify-between">
             <label className="text-[10px] font-bold uppercase tracking-widest text-text-muted">Metrics & Scoring</label>
           </div>
-          {METRICS.map((metric) => (
+          {Object.keys(exp.scores || {}).map((metric) => (
             <ScoreBar key={metric} label={metric} score={(exp.scores || {})[metric]} />
           ))}
         </div>

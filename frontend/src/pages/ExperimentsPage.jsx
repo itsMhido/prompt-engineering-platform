@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
 import { FlaskConical } from 'lucide-react';
-import { bulkDeleteExperiments, listExperiments, removeExperiment, updateExperiment, scoreEvaluation, listModels } from '../utils/api';
+import { bulkDeleteExperiments, listExperiments, removeExperiment, updateExperiment, scoreEvaluation, listModels, getMetrics } from '../utils/api';
 
 export default function ExperimentsView() {
   const [experiments, setExperiments] = useState([]);
@@ -23,8 +23,10 @@ export default function ExperimentsView() {
   const [hoveredMetric, setHoveredMetric] = useState(null);
   const [scorerModelId, setScorerModelId] = useState('');
   const [models, setModels] = useState([]);
+  const [workspaceMetrics, setWorkspaceMetrics] = useState([]);
 
   useEffect(() => {
+    getMetrics().then(res => setWorkspaceMetrics(res.metrics || [])).catch(console.error);
     listModels().then(result => {
       const active = result.filter(m => m.status === 'active');
       setModels(active);
@@ -37,9 +39,12 @@ export default function ExperimentsView() {
     setIsRescoring(true);
 
     try {
+      const defaultMetrics = workspaceMetrics.filter(m => m.isDefault).map(m => m.name);
+      const metricsToScore = metric ? [metric] : (defaultMetrics.length > 0 ? defaultMetrics : workspaceMetrics.map(m => m.name));
+      
       const result = await scoreEvaluation({
         experimentId,
-        metrics: metric ? [metric] : ['Relevance', 'Correctness', 'Fluency', 'Toxicity'],
+        metrics: metricsToScore,
         scorerModelId
       });
 

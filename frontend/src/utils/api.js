@@ -203,6 +203,34 @@ export async function updateWorkspace(workspaceId, payload) {
   return data.workspace;
 }
 
+export async function getMetrics() {
+  const data = await fetchJson('/api/metrics');
+  return data;
+}
+
+export async function createMetric(payload) {
+  const data = await fetchJson('/api/metrics', {
+    method: 'POST',
+    body: payload
+  });
+  return data;
+}
+
+export async function updateMetric(id, payload) {
+  const data = await fetchJson(`/api/metrics/${id}`, {
+    method: 'PATCH',
+    body: payload
+  });
+  return data;
+}
+
+export async function deleteMetric(id) {
+  await fetchJson(`/api/metrics/${id}`, {
+    method: 'DELETE'
+  });
+  return true;
+}
+
 export async function listModels() {
   const data = await fetchJson('/api/models');
   return data.models || [];

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer
 
 from app.core.config import settings
-from app.routers import auth, datasets, evaluations, experiments, inference, models, prompts, workspaces
+from app.routers import auth, datasets, evaluations, experiments, inference, models, prompts, workspaces, metrics
 
 security = HTTPBearer()
 
@@ -29,6 +29,7 @@ app.include_router(datasets.router, prefix="/api/datasets", tags=["datasets"])
 app.include_router(experiments.router, prefix="/api/experiments", tags=["experiments"])
 app.include_router(inference.router, prefix="/api/inference", tags=["inference"])
 app.include_router(evaluations.router, prefix="/api/evaluations", tags=["evaluations"])
+app.include_router(metrics.router, prefix="/api/metrics", tags=["metrics"])
 
 @app.get("/health")
 def health():

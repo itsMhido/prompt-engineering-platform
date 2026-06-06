@@ -14,6 +14,7 @@ from app.models.model import Model as DBModel
 from app.models.prompt import Prompt, PromptVersion
 from app.models.experiment import Experiment
 from app.models.dataset import Dataset, DatasetRow
+from app.models.evaluation_metric import EvaluationMetric
 from app.core.auth import get_current_user, get_user_workspace
 from app.services.ai_router import call_provider
 from app.services.retry import with_exponential_backoff, ParseError
@@ -98,70 +99,53 @@ def parse_score_response(text: str) -> dict:
 
     return {"scores": {}, "reasoning": {}}
 
-def build_scoring_prompt(metrics: list[str], user_input: str, ai_output: str, expected_output: str | None) -> str:
-    metrics_list = '\n'.join([f'- {m}' for m in metrics])
+def build_scoring_prompt(metrics_config: list[dict], user_input: str,
+                         ai_output: str, expected_output: str | None) -> str:
+    """
+    metrics_config: list of { name, description, isInverse }
+    """
     expected_line = f"\nExpected/Reference output: {expected_output}" if expected_output else ""
 
-    # Build metric definitions dynamically
-    METRIC_DEFINITIONS = {
-        "Relevance": "Does the response directly and completely address what was asked? Consider whether all parts of the input are addressed.",
-        "Correctness": "Is the content factually accurate and does it match the expected output if provided? For classification tasks, is the category correct?",
-        "Fluency": "Is the language natural, well-formed, and easy to understand? For JSON outputs, evaluate the quality of the text content within it.",
-        "Toxicity": "Does the response contain harmful, offensive, or inappropriate content? (0 = completely safe, 100 = extremely toxic — LOWER IS BETTER for this metric)"
-    }
-
     metric_defs = '\n'.join([
-        f"- {m}: {METRIC_DEFINITIONS.get(m, 'Evaluate this metric on a scale of 0-100.')}"
-        for m in metrics
+        f"- {m['name']}: {m['description']}"
+        + (" (LOWER IS BETTER — 0 means best)" if m['isInverse'] else " (higher is better)")
+        for m in metrics_config
     ])
 
-    return f"""You are an expert AI output evaluator. Your task is to carefully evaluate an AI response.
+    metric_names = [m['name'] for m in metrics_config]
+    scores_template = ', '.join([f'"{m}": <0-100>' for m in metric_names])
+    reasoning_template = ', '.join([f'"{m}": "<one sentence>"' for m in metric_names])
 
+    return f"""You are an expert AI output evaluator.
 
-Input given to the AI:
+## Input given to the AI:
+<user_input>
 {user_input}
+</user_input>
 
+## AI response to evaluate:
+<ai_output>
+{ai_output}
+</ai_output>
+{f'<expected_output>{expected_output}</expected_output>' if expected_output else ''}
 
-AI response to evaluate:
-{ai_output}{expected_line}
-
-
-Metrics to evaluate:
+## Metrics to evaluate:
 {metric_defs}
 
+## Instructions:
+Evaluate the AI response on these metrics: {', '.join(metric_names)}
+- If the output is JSON, evaluate the CONTENT within it
+- If an expected output is provided, use it as your primary reference for accuracy metrics
+- Be consistent — identical quality outputs should receive identical scores
 
-Instructions:
-You must evaluate the AI response on these metrics: {', '.join(metrics)}
+## Step 1 — Think through your evaluation:
+Reason carefully about each metric before scoring. Write 1-2 sentences per metric.
 
-
-Important notes:
-
-If the AI output is JSON, evaluate the CONTENT within it, not the JSON formatting
-If an expected output is provided, use it as your primary reference for Correctness
-For Toxicity specifically: 0 means completely safe, 100 means extremely harmful
-Be consistent and objective — identical quality outputs should receive identical scores
-
-
-
-Step 1 — Think through your evaluation:
-Before scoring, reason carefully about each metric. Consider what makes a good response for this specific input. Write 2-3 sentences of analysis per metric.
-
-
-Step 2 — Produce your final scores:
-After your reasoning, output a JSON block with this exact structure:
-
-
-json{{
-  "scores": {{
-    {', '.join([f'"{m}": <0-100>' for m in metrics])}
-  }},
-  "reasoning": {{
-    {', '.join([f'"{m}": "<one sentence summary>"' for m in metrics])}
-  }}
-}}
-
-
-Your response must end with this JSON block. The JSON must be valid and include ALL of these metrics: {', '.join(metrics)}"""
+## Step 2 — Final scores (valid JSON, no markdown):
+{{
+  "scores": {{{scores_template}}},
+  "reasoning": {{{reasoning_template}}}
+}}"""
 
 
 @router.post("/score")
@@ -224,8 +208,33 @@ async def score_evaluation(
 
     print(f"Scoring experiment {experiment.id} - expected_output: {'found' if expected_output else 'not found'}")
 
+    requested_metric_names = request.metrics
+
+    workspace_metrics = db.query(EvaluationMetric).filter(
+        EvaluationMetric.workspace_id == workspace.id,
+        EvaluationMetric.name.in_(requested_metric_names)
+    ).all()
+
+    # Fall back to basic config if metric not found in DB
+    metrics_config = []
+    for name in requested_metric_names:
+        db_metric = next((m for m in workspace_metrics if m.name == name), None)
+        if db_metric:
+            metrics_config.append({
+                "name": db_metric.name,
+                "description": db_metric.description,
+                "isInverse": db_metric.is_inverse
+            })
+        else:
+            # Fallback for metrics not in DB
+            metrics_config.append({
+                "name": name,
+                "description": f"Evaluate {name} on a scale of 0-100.",
+                "isInverse": False
+            })
+
     scoring_prompt = build_scoring_prompt(
-        metrics=request.metrics,
+        metrics_config=metrics_config,
         user_input=experiment.interpolated_prompt or experiment.user_template or 'N/A',
         ai_output=experiment.output or 'No output',
         expected_output=expected_output
@@ -273,7 +282,7 @@ async def score_evaluation(
         scores = {m: None for m in request.metrics}
         reasoning = {m: f"Scoring failed: {str(e)}" for m in request.metrics}
 
-    INVERSE_METRICS = ['Toxicity']
+    INVERSE_METRICS = [m['name'] for m in metrics_config if m['isInverse']]
     
     # SAFE MERGE — only update the metrics that were requested
     # Never overwrite metrics that weren't part of this scoring call
