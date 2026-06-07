@@ -5,7 +5,7 @@ from typing import Optional, Union
 from uuid import uuid4
 
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -28,6 +28,14 @@ class ScoreRequest(BaseModel):
     metrics: list[str]
     expectedOutput: Optional[str] = None
     scorerModelId: Optional[str] = None
+
+
+class BatchScoreRequest(BaseModel):
+    experimentIds: list[str]
+    metrics: list[str]
+    scorerModelId: str
+    expectedOutputCol: Optional[str] = None
+    delayMs: int = 3000
 
 
 class BatchRunRequest(BaseModel):
@@ -147,6 +155,52 @@ Reason carefully about each metric before scoring. Write 1-2 sentences per metri
   "reasoning": {{{reasoning_template}}}
 }}"""
 
+async def _score_experiment(experiment, scorer_model, metrics_config, expected_output):
+    scoring_prompt = build_scoring_prompt(
+        metrics_config=metrics_config,
+        user_input=experiment.interpolated_prompt or experiment.user_template or 'N/A',
+        ai_output=experiment.output or 'No output',
+        expected_output=expected_output
+    )
+
+    requested_metric_names = [m["name"] for m in metrics_config]
+
+    async def _score_once():
+        result = await call_provider(
+            scorer_model,
+            "You are an objective AI evaluation assistant. Respond only in valid JSON.",
+            scoring_prompt
+        )
+
+        parsed = parse_score_response(result.get("output", "") or "")
+        _scores = parsed.get("scores", {})
+        _reasoning = parsed.get("reasoning", {})
+
+        missing = [m for m in requested_metric_names if m not in _scores or _scores[m] is None]
+        if missing:
+            raise ParseError(
+                f"Scorer response missing metrics: {missing}. "
+                f"Raw response: {result.get('output', '')[:200]}"
+            )
+
+        for metric in requested_metric_names:
+            _scores[metric] = max(0, min(100, int(_scores[metric])))
+
+        return _scores, _reasoning
+
+    try:
+        return await with_exponential_backoff(
+            _score_once,
+            max_retries=3,
+            base_delay=1.0,
+            max_delay=10.0
+        )
+    except ParseError as e:
+        print(f"Scoring failed after retries: {e}")
+        return {m: None for m in requested_metric_names}, {m: "Failed to score after retries" for m in requested_metric_names}
+    except Exception as e:
+        return {m: None for m in requested_metric_names}, {m: f"Scoring failed: {str(e)}" for m in requested_metric_names}
+
 
 @router.post("/score")
 async def score_evaluation(
@@ -233,54 +287,12 @@ async def score_evaluation(
                 "isInverse": False
             })
 
-    scoring_prompt = build_scoring_prompt(
+    scores, reasoning = await _score_experiment(
+        experiment=experiment,
+        scorer_model=scorer_model,
         metrics_config=metrics_config,
-        user_input=experiment.interpolated_prompt or experiment.user_template or 'N/A',
-        ai_output=experiment.output or 'No output',
         expected_output=expected_output
     )
-
-    # Single API call for all metrics
-    async def _score_once():
-        result = await call_provider(
-            scorer_model,
-            "You are an objective AI evaluation assistant. Respond only in valid JSON.",
-            scoring_prompt
-        )
-
-        parsed = parse_score_response(result.get("output", "") or "")
-        _scores = parsed.get("scores", {})
-        _reasoning = parsed.get("reasoning", {})
-
-        # Check all requested metrics are present and valid
-        missing = [m for m in request.metrics if m not in _scores or _scores[m] is None]
-        if missing:
-            raise ParseError(
-                f"Scorer response missing metrics: {missing}. "
-                f"Raw response: {result.get('output', '')[:200]}"
-            )
-
-        # Clamp all scores to 0-100
-        for metric in request.metrics:
-            _scores[metric] = max(0, min(100, int(_scores[metric])))
-
-        return _scores, _reasoning
-
-    try:
-        scores, reasoning = await with_exponential_backoff(
-            _score_once,
-            max_retries=3,       # 3 retries for parse failures
-            base_delay=1.0,      # shorter delay for parse retries vs rate limits
-            max_delay=10.0
-        )
-    except ParseError as e:
-        # After all retries exhausted, fall back to None for missing metrics
-        print(f"Scoring failed after retries: {e}")
-        scores = {m: None for m in request.metrics}
-        reasoning = {m: "Failed to score after retries" for m in request.metrics}
-    except Exception as e:
-        scores = {m: None for m in request.metrics}
-        reasoning = {m: f"Scoring failed: {str(e)}" for m in request.metrics}
 
     INVERSE_METRICS = [m['name'] for m in metrics_config if m['isInverse']]
     
@@ -433,3 +445,199 @@ async def batch_run_evaluation(
         "experiments": [experiment_to_dict(exp) for exp in experiments],
         "errors": errors
     }
+
+@router.post("/score-batch")
+async def score_batch(
+    body: BatchScoreRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Triggers batch scoring as a background task.
+    Returns immediately with a job_id.
+    Frontend polls GET /api/evaluations/score-batch/{job_id} for progress.
+    """
+    workspace = get_user_workspace(current_user, db)
+
+    # Validate scorer model belongs to workspace
+    scorer_model = db.query(DBModel).filter(
+        DBModel.id == body.scorerModelId,
+        DBModel.workspace_id == workspace.id,
+        DBModel.status == "active"
+    ).first()
+    if not scorer_model:
+        raise HTTPException(status_code=404, detail="Scorer model not found or inactive")
+
+    # Validate all experiments belong to workspace
+    experiments = db.query(Experiment).filter(
+        Experiment.id.in_(body.experimentIds),
+        Experiment.workspace_id == workspace.id,
+        Experiment.status == "success"   # only score successful experiments
+    ).all()
+
+    if not experiments:
+        raise HTTPException(status_code=400, detail="No valid experiments found to score")
+
+    # Generate a job ID to track progress
+    job_id = str(uuid4())
+
+    # Store initial job state in a simple in-memory dict
+    SCORING_JOBS[job_id] = {
+        "status": "running",
+        "total": len(experiments),
+        "completed": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "errors": [],
+        "workspaceId": str(workspace.id)
+    }
+
+    # Launch background task
+    background_tasks.add_task(
+        run_batch_scoring,
+        job_id=job_id,
+        experiment_ids=[str(e.id) for e in experiments],
+        metrics=body.metrics,
+        scorer_model_id=str(scorer_model.id),
+        expected_output_col=body.expectedOutputCol,
+        delay_ms=body.delayMs,
+        workspace_id=str(workspace.id)
+    )
+
+    return {
+        "jobId": job_id,
+        "total": len(experiments),
+        "message": f"Scoring {len(experiments)} experiments in background"
+    }
+
+
+# In-memory job tracking (module-level dict)
+SCORING_JOBS: dict = {}
+
+
+async def run_batch_scoring(
+    job_id: str,
+    experiment_ids: list[str],
+    metrics: list[str],
+    scorer_model_id: str,
+    expected_output_col: Optional[str],
+    delay_ms: int,
+    workspace_id: str
+):
+    """Background task — runs entirely on Railway, not affected by browser navigation"""
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        scorer_model = db.query(DBModel).filter(DBModel.id == scorer_model_id).first()
+        workspace_metrics = db.query(EvaluationMetric).filter(
+            EvaluationMetric.workspace_id == workspace_id,
+            EvaluationMetric.name.in_(metrics)
+        ).all()
+
+        metrics_config = [
+            {"name": m.name, "description": m.description, "isInverse": m.is_inverse}
+            for m in workspace_metrics
+        ]
+
+        for exp_id in experiment_ids:
+            # Check if job was cancelled
+            job = SCORING_JOBS.get(job_id, {})
+            if job.get("status") == "cancelled":
+                break
+
+            experiment = db.query(Experiment).filter(Experiment.id == exp_id).first()
+            if not experiment:
+                continue
+
+            try:
+                # Get expected output from dataset if available
+                expected_output = None
+                if expected_output_col and experiment.dataset_id and experiment.dataset_row_index is not None:
+                    row = db.query(DatasetRow).filter(
+                        DatasetRow.dataset_id == experiment.dataset_id,
+                        DatasetRow.row_index == experiment.dataset_row_index
+                    ).first()
+                    if row and row.row_data:
+                        expected_output = str(row.row_data.get(expected_output_col, '')) or None
+
+                # Score this experiment
+                scores, reasoning = await _score_experiment(
+                    experiment=experiment,
+                    scorer_model=scorer_model,
+                    metrics_config=metrics_config,
+                    expected_output=expected_output
+                )
+
+                # Save scores
+                existing_scores = experiment.scores or {}
+                existing_reasoning = experiment.reasoning or {}
+                merged_scores = {**existing_scores, **scores}
+                merged_reasoning = {**existing_reasoning, **reasoning}
+
+                INVERSE_METRICS = [m['name'] for m in metrics_config if m['isInverse']]
+                scoreable = {
+                    k: v for k, v in merged_scores.items()
+                    if k not in INVERSE_METRICS and v is not None
+                    and isinstance(v, (int, float)) and v >= 0
+                }
+                overall = round(sum(scoreable.values()) / len(scoreable), 1) if scoreable else None
+
+                experiment.scores = merged_scores
+                experiment.reasoning = merged_reasoning
+                experiment.score = overall
+                db.commit()
+
+                SCORING_JOBS[job_id]["succeeded"] += 1
+
+            except Exception as e:
+                SCORING_JOBS[job_id]["failed"] += 1
+                SCORING_JOBS[job_id]["errors"].append({
+                    "experimentId": exp_id,
+                    "message": str(e)
+                })
+
+            SCORING_JOBS[job_id]["completed"] += 1
+
+            # Delay between experiments to avoid rate limits
+            if delay_ms > 0:
+                await asyncio.sleep(delay_ms / 1000)
+
+        if SCORING_JOBS[job_id]["status"] == "running":
+            SCORING_JOBS[job_id]["status"] = "completed"
+
+    except Exception as e:
+        SCORING_JOBS[job_id]["status"] = "failed"
+        SCORING_JOBS[job_id]["errors"].append({"message": str(e)})
+    finally:
+        db.close()
+
+
+@router.get("/score-batch/{job_id}")
+def get_scoring_job(job_id: str, current_user: User = Depends(get_current_user)):
+    """Poll this endpoint to check batch scoring progress"""
+    job = SCORING_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    # need local db session to check workspace
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        workspace = get_user_workspace(current_user, db)
+        if job.get("workspaceId") != str(workspace.id):
+            raise HTTPException(status_code=403, detail="Not authorized")
+    finally:
+        db.close()
+    return job
+
+
+@router.post("/score-batch/{job_id}/cancel")
+def cancel_scoring_job(job_id: str, current_user: User = Depends(get_current_user)):
+    """Cancel a running batch scoring job"""
+    job = SCORING_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("status") == "running":
+        SCORING_JOBS[job_id]["status"] = "cancelled"
+    return {"ok": True, "status": SCORING_JOBS[job_id]["status"]}

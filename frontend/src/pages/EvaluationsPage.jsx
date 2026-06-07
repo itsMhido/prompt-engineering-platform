@@ -18,7 +18,10 @@ import {
   scoreEvaluation,
   updateExperiment,
   renameBatch,
-  getMetrics
+  getMetrics,
+  startBatchScoring,
+  getScoringJob,
+  cancelScoringJob
 } from '../utils/api';
 
 function buildGroupedScores(experiments, key, metricNames) {
@@ -560,8 +563,10 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
   // Other state
   const [expandedRows, setExpandedRows] = useState(new Set());
   const [isAIScoringOpen, setIsAIScoringOpen] = useState(false);
-  const [scoringProgress, setScoringProgress] = useState(null);
-  const [scoringStatus, setScoringStatus] = useState('');
+  const [scoringJobId, setScoringJobId] = useState(null);
+  const [scoringJob, setScoringJob] = useState(null);
+  const pollingRef = useRef(null);
+  const [isScoring, setIsScoring] = useState(false);
   const [successBanner, setSuccessBanner] = useState('');
   const [newBatchDatasetId, setNewBatchDatasetId] = useState('');
   const [newBatchPromptId, setNewBatchPromptId] = useState('');
@@ -821,67 +826,80 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
     setIsAIScoringOpen(false);
     localStorage.setItem('lastScorerModelId', scorerModelId);
 
-    const unscored = datasetExps.filter((experiment) => experiment.status === 'success' && !metrics.every((metric) => experiment.scores?.[metric] !== undefined));
-    const skippedErrors = datasetExps.filter(e => e.status === 'error').length;
+    if (!scorerModelId || metrics.length === 0) return;
+    setIsScoring(true);
 
-    if (skippedErrors > 0 || unscored.length > 0) {
-      setScoringProgress({ current: 0, total: unscored.length });
-    }
+    const toScore = datasetExps.filter(
+      e => e.status === 'success' &&
+           !metrics.every(metric => e.scores?.[metric] !== undefined)
+    );
 
-    if (skippedErrors > 0) {
-      setScoringStatus(`Skipping ${skippedErrors} failed experiment${skippedErrors > 1 ? 's' : ''}`);
-      await new Promise(r => setTimeout(r, 1000));
-    }
-
-    if (unscored.length === 0) {
-      setScoringProgress(null);
-      setScoringStatus('');
+    if (toScore.length === 0) {
+      setIsScoring(false);
       return;
     }
 
-    for (let index = 0; index < unscored.length; index += 1) {
-      const experiment = unscored[index];
-      setScoringProgress({ current: index + 1, total: unscored.length });
+    try {
+      const result = await startBatchScoring({
+        experimentIds: toScore.map(e => e.id),
+        metrics: metrics,
+        scorerModelId: scorerModelId,
+        expectedOutputCol: expectedOutputCol || null,
+        delayMs: 3000
+      });
 
-      let expectedOutput = undefined;
-      if (expectedOutputCol && experiment.datasetId) {
-        const dataset = await fetchDatasetDetail(experiment.datasetId);
-        const row = dataset?.rows?.[experiment.datasetRowIndex];
-        expectedOutput = row?.[expectedOutputCol];
-      }
+      setScoringJobId(result.jobId);
+      setScoringJob({ status: 'running', total: result.total, completed: 0,
+                      succeeded: 0, failed: 0, errors: [] });
 
-      try {
-        setScoringStatus('Calling scorer model...');
-        const result = await scoreEvaluation({
-          experimentId: experiment.id,
-          metrics,
-          expectedOutput,
-          scorerModelId
-        });
-        setScoringStatus('');
+      pollingRef.current = setInterval(async () => {
+        try {
+          const job = await getScoringJob(result.jobId);
+          setScoringJob(job);
 
-        if (result.updatedExperiment) {
-          // Update both the global experiments store and the local batchExperiments view
-          setExperiments((prev) => prev.map((e) => e.id === experiment.id ? result.updatedExperiment : e));
-          setBatchExperiments((prev) => prev.map((e) => e.id === experiment.id ? result.updatedExperiment : e));
-          console.log(`Row scored by ${result.scorerModelName}`);
+          if (job.completed > 0) {
+            const updated = await listExperiments({ batchId: selectedBatchId });
+            setBatchExperiments(updated);
+            setExperiments((prev) => {
+              const updatedMap = new Map(updated.map(e => [e.id, e]));
+              return prev.map(e => updatedMap.has(e.id) ? updatedMap.get(e.id) : e);
+            });
+          }
+
+          if (job.status !== 'running') {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+            setIsScoring(false);
+            setScoringJobId(null);
+          }
+        } catch (err) {
+          console.error('Polling failed:', err);
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+          setIsScoring(false);
         }
-      } catch (err) {
-        if (err.message?.includes('rate limit')) {
-          setScoringStatus('Rate limited — backend retrying automatically...');
-        } else {
-          setScoringStatus(`Error: ${err.message}`);
-        }
-        console.error(`Failed to score experiment ${experiment.id}:`, err);
-        // Keep the run moving if one item fails to score.
-      }
+      }, 3000);
 
-      // The only delay needed is a small UI breathing room between experiments:
-      await new Promise(r => setTimeout(r, 500));
+    } catch (err) {
+      console.error('Failed to start scoring:', err);
+      setIsScoring(false);
     }
+  };
 
-    setScoringProgress(null);
-    setScoringStatus('');
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, []);
+
+  const handleCancelScoring = async () => {
+    if (!scoringJobId) return;
+    await cancelScoringJob(scoringJobId);
+    clearInterval(pollingRef.current);
+    pollingRef.current = null;
+    setIsScoring(false);
+    setScoringJobId(null);
+    setScoringJob(null);
   };
 
 
@@ -1199,21 +1217,71 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
             )}
           </div>
 
-          {scoringProgress && (
+          {isScoring && scoringJob && (
             <div style={{
-              padding: '10px 16px',
-              background: 'rgba(136, 210, 115, 0.1)',
+              padding: '12px 16px', marginBottom: 16,
+              background: 'rgba(136, 210, 115, 0.08)',
               border: '1px solid rgba(136, 210, 115, 0.3)',
-              borderRadius: 6,
-              marginBottom: 16,
-              fontSize: 13
+              borderRadius: 8
             }}>
-              <div>⚡ Scoring {scoringProgress.current} of {scoringProgress.total} with AI...</div>
-              {scoringStatus && (
-                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                  {scoringStatus}
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                <span style={{ fontSize: 13 }}>
+                  ⚡ Scoring {scoringJob.completed} of {scoringJob.total}...
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+                  {scoringJob.succeeded} succeeded · {scoringJob.failed} failed
+                </span>
+              </div>
+              <div style={{ height: 4, background: '#252320', borderRadius: 2, marginBottom: 10 }}>
+                <div style={{
+                  height: '100%',
+                  width: `${scoringJob.total > 0 ? (scoringJob.completed / scoringJob.total) * 100 : 0}%`,
+                  background: '#88d273', borderRadius: 2, transition: 'width 400ms ease'
+                }} />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+                  Running on server — safe to navigate away
+                </span>
+                <button
+                  onClick={handleCancelScoring}
+                  style={{ fontSize: 11, padding: '3px 10px',
+                           border: '1px solid #252320', borderRadius: 4,
+                           background: 'transparent', color: 'var(--muted)', cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+              </div>
+              {scoringJob.errors?.length > 0 && (
+                <div style={{ marginTop: 8, fontSize: 11, color: '#ff6b6b' }}>
+                  {scoringJob.errors.slice(-2).map((e, i) => (
+                    <div key={i}>{e.message}</div>
+                  ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {scoringJob?.status === 'completed' && !isScoring && (
+            <div style={{
+              padding: '10px 16px', marginBottom: 16,
+              background: 'rgba(136, 210, 115, 0.08)',
+              border: '1px solid rgba(136, 210, 115, 0.3)',
+              borderRadius: 8, fontSize: 13
+            }}>
+              ✓ Scoring complete — {scoringJob.succeeded} succeeded
+              {scoringJob.failed > 0 && `, ${scoringJob.failed} failed`}
+            </div>
+          )}
+
+          {scoringJob?.status === 'cancelled' && (
+            <div style={{
+              padding: '10px 16px', marginBottom: 16,
+              background: 'rgba(232, 168, 71, 0.08)',
+              border: '1px solid rgba(232, 168, 71, 0.3)',
+              borderRadius: 8, fontSize: 13, color: '#e8a847'
+            }}>
+              ⚠ Scoring cancelled after {scoringJob.completed} of {scoringJob.total} experiments
             </div>
           )}
 

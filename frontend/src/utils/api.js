@@ -448,3 +448,20 @@ export async function renameBatch(batchId, name) {
   });
   return data;
 }
+
+export async function startBatchScoring(payload) {
+  return fetchJson('/api/evaluations/score-batch', {
+    method: 'POST',
+    body: payload
+  });
+}
+
+export async function getScoringJob(jobId) {
+  return fetchJson(`/api/evaluations/score-batch/${jobId}`);
+}
+
+export async function cancelScoringJob(jobId) {
+  return fetchJson(`/api/evaluations/score-batch/${jobId}/cancel`, {
+    method: 'POST'
+  });
+}

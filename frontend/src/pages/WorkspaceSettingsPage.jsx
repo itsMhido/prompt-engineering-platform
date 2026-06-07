@@ -204,8 +204,6 @@ export default function WorkspaceSettingsPage({ session, onLogout }) {
           </div>
         </section>
 
-        </section>
-
         <section className="border-b border-border pb-8">
           <div style={{ marginBottom: 32 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
