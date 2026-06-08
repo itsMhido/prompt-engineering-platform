@@ -157,7 +157,6 @@ async def _call_huggingface(model, api_key: str, system_prompt: str, user_messag
         messages.append({"role": "system", "content": system_prompt})
     messages.append({"role": "user", "content": user_message})
 
-    # ── Step 1: Try chat completions (modern models) ──────────────────────────
     try:
         response = await hf_client.chat.completions.create(
             model=model.model_id,
@@ -172,32 +171,12 @@ async def _call_huggingface(model, api_key: str, system_prompt: str, user_messag
             "output_tokens": usage.completion_tokens if usage else 0,
         }
 
-    except Exception as chat_err:
-        err_str = str(chat_err).lower()
-        # Re-raise auth errors immediately — no point falling back
-        if any(k in err_str for k in ("401", "403", "unauthorized", "forbidden", "authentication")):
-            raise Exception(f"HuggingFace authentication failed — check your HF token. ({chat_err})")
-
-        # ── Step 2: Fallback — legacy text_generation() ──────────────────────
-        combined_input = (
-            f"{system_prompt}\n\nUser: {user_message}\nAssistant:"
-            if system_prompt.strip()
-            else f"User: {user_message}\nAssistant:"
-        )
-        output_text = await hf_client.text_generation(
-            prompt=combined_input,
-            model=model.model_id,
-            max_new_tokens=model.max_tokens,
-            temperature=max(model.temperature, 0.01),
-        )
-        # Legacy API doesn't return token counts — estimate via word count
-        input_tokens = max(1, int(len(combined_input.split()) * 1.33))
-        output_tokens = max(1, int(len(output_text.split()) * 1.33))
-        return {
-            "output": output_text,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-        }
+    except Exception as e:
+        err_str = str(e)
+        # Surface a clean, actionable error message
+        if "401" in err_str or "403" in err_str or "unauthorized" in err_str.lower() or "forbidden" in err_str.lower():
+            raise Exception("HuggingFace authentication failed — check your HF token and ensure it has 'Make calls to Inference Providers' permission.")
+        raise Exception(f"HuggingFace inference error: {err_str}")
 
 async def call_provider(model, system_prompt: str, user_message: str) -> dict:
     api_key = decrypt(model.api_key_encrypted)
