@@ -1239,10 +1239,7 @@ function BatchEvalView({ initialViewMode = 'existing', experiments, setExperimen
                   background: '#88d273', borderRadius: 2, transition: 'width 400ms ease'
                 }} />
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: 11, color: 'var(--muted)' }}>
-                  Running on server — safe to navigate away
-                </span>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
                 <button
                   onClick={handleCancelScoring}
                   style={{ fontSize: 11, padding: '3px 10px',

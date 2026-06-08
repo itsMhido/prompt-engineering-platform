@@ -16,6 +16,18 @@ COST_PER_1K_TOKENS = {
     "llama-3.3-70b-versatile":      {"input": 0.0,      "output": 0.0},
     "llama3-70b-8192":              {"input": 0.0,      "output": 0.0},
     "mixtral-8x7b-32768":           {"input": 0.0,      "output": 0.0},
+    # HuggingFace — Serverless Inference API (free tier for popular models)
+    "meta-llama/Llama-3.1-8B-Instruct":    {"input": 0.0,  "output": 0.0},
+    "meta-llama/Llama-3.3-70B-Instruct":   {"input": 0.0,  "output": 0.0},
+    "meta-llama/Llama-3.2-3B-Instruct":    {"input": 0.0,  "output": 0.0},
+    "mistralai/Mistral-7B-Instruct-v0.3":  {"input": 0.0,  "output": 0.0},
+    "Qwen/Qwen2.5-72B-Instruct":           {"input": 0.0,  "output": 0.0},
+    "Qwen/Qwen2.5-7B-Instruct":            {"input": 0.0,  "output": 0.0},
+    "microsoft/Phi-4":                      {"input": 0.0,  "output": 0.0},
+    "microsoft/phi-4-mini-instruct":        {"input": 0.0,  "output": 0.0},
+    "deepseek-ai/DeepSeek-R1-0528":        {"input": 0.0,  "output": 0.0},
+    "google/gemma-2-27b-it":               {"input": 0.0,  "output": 0.0},
+    "google/gemma-2-9b-it":                {"input": 0.0,  "output": 0.0},
 }
 
 def calculate_cost(model_id: str, input_tokens: int, output_tokens: int) -> float:

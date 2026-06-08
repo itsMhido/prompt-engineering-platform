@@ -190,6 +190,7 @@ export default function ModelsPage({ onModelsChanged }) {
       Google: 'bg-green-500',
       Mistral: 'bg-purple-500',
       Groq: 'bg-yellow-600',
+      HuggingFace: 'bg-yellow-400',
       Custom: 'bg-gray-500'
     };
     return colors[provider] || 'bg-gray-500';
@@ -318,14 +319,58 @@ export default function ModelsPage({ onModelsChanged }) {
                     <option>Google</option>
                     <option>Mistral</option>
                     <option>Groq</option>
+                    <option>HuggingFace</option>
                     <option>Custom</option>
                   </select>
                 </div>
               </div>
+
+              {/* HuggingFace helper — only shown when HuggingFace provider is selected */}
+              {formData.provider === 'HuggingFace' && (
+                <div className="rounded-md border border-yellow-500/30 bg-yellow-500/10 px-4 py-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-yellow-300">
+                      🤗 Use your HF token (starts with <code className="font-mono text-xs bg-black/20 px-1 rounded">hf_...</code>). The Serverless Inference API is free for popular models.
+                    </p>
+                    <a
+                      href="https://huggingface.co/models?pipeline_tag=text-generation&sort=trending"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-3 shrink-0 rounded border border-yellow-500/50 bg-yellow-500/20 px-3 py-1 text-xs font-medium text-yellow-300 hover:bg-yellow-500/30 transition-colors"
+                    >
+                      Browse models ↗
+                    </a>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-yellow-300">Quick-fill a popular model</label>
+                    <select
+                      className="w-full rounded border border-yellow-500/40 bg-background px-3 py-2 text-sm outline-none focus:border-yellow-400"
+                      defaultValue=""
+                      onChange={(e) => {
+                        if (e.target.value) setFormData((prev) => ({ ...prev, modelId: e.target.value }));
+                      }}
+                    >
+                      <option value="" disabled>— pick a preset —</option>
+                      <option value="meta-llama/Llama-3.1-8B-Instruct">Llama 3.1 8B Instruct (Meta)</option>
+                      <option value="meta-llama/Llama-3.3-70B-Instruct">Llama 3.3 70B Instruct (Meta)</option>
+                      <option value="meta-llama/Llama-3.2-3B-Instruct">Llama 3.2 3B Instruct (Meta)</option>
+                      <option value="mistralai/Mistral-7B-Instruct-v0.3">Mistral 7B Instruct v0.3</option>
+                      <option value="Qwen/Qwen2.5-72B-Instruct">Qwen 2.5 72B Instruct</option>
+                      <option value="Qwen/Qwen2.5-7B-Instruct">Qwen 2.5 7B Instruct</option>
+                      <option value="microsoft/Phi-4">Phi-4 (Microsoft)</option>
+                      <option value="microsoft/phi-4-mini-instruct">Phi-4 Mini Instruct (Microsoft)</option>
+                      <option value="deepseek-ai/DeepSeek-R1-0528">DeepSeek R1 0528</option>
+                      <option value="google/gemma-2-9b-it">Gemma 2 9B IT (Google)</option>
+                      <option value="google/gemma-2-27b-it">Gemma 2 27B IT (Google)</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="mb-1 block text-sm font-medium">Model ID / Version</label>
-                  <input type="text" value={formData.modelId} onChange={(e) => setFormData({ ...formData, modelId: e.target.value })} className="w-full rounded border border-border bg-background px-3 py-2 outline-none focus:border-primary/50" placeholder="e.g. gpt-4-turbo" />
+                  <input type="text" value={formData.modelId} onChange={(e) => setFormData({ ...formData, modelId: e.target.value })} className="w-full rounded border border-border bg-background px-3 py-2 outline-none focus:border-primary/50" placeholder={formData.provider === 'HuggingFace' ? 'e.g. meta-llama/Llama-3.1-8B-Instruct' : 'e.g. gpt-4-turbo'} />
                 </div>
                 <div>
                   <label className="mb-1 block text-sm font-medium">Base URL / Endpoint</label>
