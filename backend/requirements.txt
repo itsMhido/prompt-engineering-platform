@@ -8,6 +8,7 @@ passlib[bcrypt]
 cryptography
 python-dotenv
 httpx
+huggingface_hub[inference]
 pydantic[email]
 pydantic-settings
 python-multipart

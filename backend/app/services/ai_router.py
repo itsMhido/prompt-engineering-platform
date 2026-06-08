@@ -110,100 +110,92 @@ async def _call_google(model, api_key: str, system_prompt: str, user_message: st
 
 async def _call_huggingface(model, api_key: str, system_prompt: str, user_message: str) -> dict:
     """
-    Call HuggingFace Inference API.
+    Call HuggingFace Inference API via the official huggingface_hub library.
+
+    Uses AsyncInferenceClient which manages its own HTTP transport, avoiding
+    the asyncio DNS resolution issues that affect raw httpx on some cloud
+    providers (e.g. Railway).
 
     Strategy:
-    1. Try the HF Messages API (OpenAI-compatible chat completions). Works for most
-       modern popular models (Llama-3, Mistral, Qwen, Phi, DeepSeek, etc.).
-    2. If the model doesn't support chat completions (non-auth 4xx), fall back to
-       the legacy text-generation endpoint. Token counts are estimated via a
-       word-count heuristic (~1.33 tokens/word) since the legacy API doesn't expose them.
-
-    Dedicated HuggingFace Endpoints (custom URLs) are supported — if model.endpoint
-    is set to a custom URL it will be used directly for step 1.
+    1. Try chat.completions.create() — works for most modern models
+       (Llama-3, Mistral, Qwen, Phi, DeepSeek, Gemma, etc.)
+    2. If the model doesn't support chat completions, fall back to
+       text_generation() for legacy text-gen models.
     """
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "content-type": "application/json"
+    import asyncio
+    from huggingface_hub import AsyncInferenceClient
+
+    # Determine provider — use "hf-inference" (serverless) by default.
+    # If the user set a custom endpoint (Dedicated Endpoint), use that directly.
+    custom_endpoint = (model.endpoint or "").strip()
+
+    # Strip out the known serverless URLs so we don't treat them as custom
+    serverless_urls = {
+        "https://api-inference.huggingface.co/v1/chat/completions",
+        "https://router.huggingface.co/hf-inference/v1/chat/completions",
     }
+    is_custom_endpoint = (
+        bool(custom_endpoint) and custom_endpoint not in serverless_urls
+    )
 
-    # Determine chat endpoint — use stored endpoint or fall back to HF serverless default
-    chat_endpoint = (model.endpoint or "").strip()
-    if not chat_endpoint:
-        chat_endpoint = "https://router.huggingface.co/hf-inference/v1/chat/completions"
+    if is_custom_endpoint:
+        # Dedicated HuggingFace Endpoint — pass URL directly
+        hf_client = AsyncInferenceClient(
+            base_url=custom_endpoint,
+            api_key=api_key,
+        )
+    else:
+        # Serverless Inference API via the hf-inference provider
+        hf_client = AsyncInferenceClient(
+            provider="hf-inference",
+            api_key=api_key,
+        )
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        # ── Step 1: Try Messages API (OpenAI-compat) ──────────────────────────
-        chat_payload = {
-            "model": model.model_id,
-            "max_tokens": model.max_tokens,
-            "temperature": model.temperature,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message}
-            ]
+    messages = []
+    if system_prompt and system_prompt.strip():
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": user_message})
+
+    # ── Step 1: Try chat completions (modern models) ──────────────────────────
+    try:
+        response = await hf_client.chat.completions.create(
+            model=model.model_id,
+            messages=messages,
+            max_tokens=model.max_tokens,
+            temperature=model.temperature,
+        )
+        usage = response.usage
+        return {
+            "output": response.choices[0].message.content,
+            "input_tokens": usage.prompt_tokens if usage else 0,
+            "output_tokens": usage.completion_tokens if usage else 0,
         }
-        response = await client.post(chat_endpoint, headers=headers, json=chat_payload)
 
-        if response.status_code == 429:
-            _check_rate_limit(response.json(), response.status_code, "HuggingFace")
+    except Exception as chat_err:
+        err_str = str(chat_err).lower()
+        # Only fall back for "model not supported" type errors, not auth errors
+        if any(k in err_str for k in ("401", "403", "unauthorized", "forbidden", "authentication")):
+            raise Exception(f"HuggingFace authentication failed — check your HF token. ({chat_err})")
 
-        if response.status_code in (401, 403):
-            data = response.json()
-            raise Exception(
-                data.get("error", "HuggingFace authentication failed — check your HF token.")
-            )
-
-        if response.status_code == 200:
-            data = response.json()
-            usage = data.get("usage", {})
-            return {
-                "output": data["choices"][0]["message"]["content"],
-                "input_tokens": usage.get("prompt_tokens", 0),
-                "output_tokens": usage.get("completion_tokens", 0)
-            }
-
-        # ── Step 2: Fallback — legacy text-generation endpoint ────────────────
-        # Reached when the model doesn't support chat completions (404 / 422 / etc.)
-        legacy_url = f"https://api-inference.huggingface.co/models/{model.model_id}"
+        # ── Step 2: Fallback — legacy text_generation() ──────────────────────
         combined_input = (
             f"{system_prompt}\n\nUser: {user_message}\nAssistant:"
             if system_prompt.strip()
             else f"User: {user_message}\nAssistant:"
         )
-        legacy_payload = {
-            "inputs": combined_input,
-            "parameters": {
-                "max_new_tokens": model.max_tokens,
-                "temperature": max(model.temperature, 0.01),  # HF legacy requires > 0
-                "return_full_text": False
-            }
-        }
-        legacy_response = await client.post(legacy_url, headers=headers, json=legacy_payload)
-
-        if legacy_response.status_code == 429:
-            _check_rate_limit(legacy_response.json(), legacy_response.status_code, "HuggingFace")
-
-        if legacy_response.status_code != 200:
-            error_data = legacy_response.json() if legacy_response.content else {}
-            raise Exception(
-                error_data.get("error", f"HuggingFace API error (status {legacy_response.status_code})")
-            )
-
-        legacy_data = legacy_response.json()
-        if isinstance(legacy_data, list) and legacy_data:
-            output_text = legacy_data[0].get("generated_text", "")
-        else:
-            raise Exception("Unexpected response format from HuggingFace legacy endpoint.")
-
-        # Estimate token counts (~1.33 tokens per word)
+        output_text = await hf_client.text_generation(
+            prompt=combined_input,
+            model=model.model_id,
+            max_new_tokens=model.max_tokens,
+            temperature=max(model.temperature, 0.01),
+        )
+        # Legacy API doesn't return token counts — estimate via word count
         input_tokens = max(1, int(len(combined_input.split()) * 1.33))
         output_tokens = max(1, int(len(output_text.split()) * 1.33))
-
         return {
             "output": output_text,
             "input_tokens": input_tokens,
-            "output_tokens": output_tokens
+            "output_tokens": output_tokens,
         }
 
 async def call_provider(model, system_prompt: str, user_message: str) -> dict:
