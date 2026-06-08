@@ -20,7 +20,7 @@ export const PROVIDER_DEFAULTS = {
     modelId: 'llama-3.1-8b-instant'
   },
   HuggingFace: {
-    endpoint: 'https://api-inference.huggingface.co/v1/chat/completions',
+    endpoint: 'https://router.huggingface.co/hf-inference/v1/chat/completions',
     modelId: 'meta-llama/Llama-3.1-8B-Instruct'
   },
   Custom: {

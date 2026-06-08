@@ -130,7 +130,7 @@ async def _call_huggingface(model, api_key: str, system_prompt: str, user_messag
     # Determine chat endpoint — use stored endpoint or fall back to HF serverless default
     chat_endpoint = (model.endpoint or "").strip()
     if not chat_endpoint:
-        chat_endpoint = "https://api-inference.huggingface.co/v1/chat/completions"
+        chat_endpoint = "https://router.huggingface.co/hf-inference/v1/chat/completions"
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         # ── Step 1: Try Messages API (OpenAI-compat) ──────────────────────────

@@ -182,7 +182,7 @@ async def validate_model(request: ValidateRequest, current_user: User = Depends(
                 # Use stored endpoint or fall back to HF Messages API default
                 hf_endpoint = (endpoint or "").strip()
                 if not hf_endpoint:
-                    hf_endpoint = "https://api-inference.huggingface.co/v1/chat/completions"
+                    hf_endpoint = "https://router.huggingface.co/hf-inference/v1/chat/completions"
                 headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
                 payload = {
                     "model": provider_model_id,
