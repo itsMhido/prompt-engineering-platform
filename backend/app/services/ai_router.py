@@ -145,9 +145,10 @@ async def _call_huggingface(model, api_key: str, system_prompt: str, user_messag
             api_key=api_key,
         )
     else:
-        # Serverless Inference API via the hf-inference provider
+        # Let HuggingFace automatically select the best available provider
+        # for the given model. Specifying provider="hf-inference" would limit
+        # to only models on that specific tier; omitting it allows all supported models.
         hf_client = AsyncInferenceClient(
-            provider="hf-inference",
             api_key=api_key,
         )
 
@@ -173,7 +174,7 @@ async def _call_huggingface(model, api_key: str, system_prompt: str, user_messag
 
     except Exception as chat_err:
         err_str = str(chat_err).lower()
-        # Only fall back for "model not supported" type errors, not auth errors
+        # Re-raise auth errors immediately — no point falling back
         if any(k in err_str for k in ("401", "403", "unauthorized", "forbidden", "authentication")):
             raise Exception(f"HuggingFace authentication failed — check your HF token. ({chat_err})")
 

@@ -351,17 +351,21 @@ export default function ModelsPage({ onModelsChanged }) {
                       }}
                     >
                       <option value="" disabled>— pick a preset —</option>
-                      <option value="meta-llama/Llama-3.1-8B-Instruct">Llama 3.1 8B Instruct (Meta)</option>
-                      <option value="meta-llama/Llama-3.3-70B-Instruct">Llama 3.3 70B Instruct (Meta)</option>
-                      <option value="meta-llama/Llama-3.2-3B-Instruct">Llama 3.2 3B Instruct (Meta)</option>
-                      <option value="mistralai/Mistral-7B-Instruct-v0.3">Mistral 7B Instruct v0.3</option>
-                      <option value="Qwen/Qwen2.5-72B-Instruct">Qwen 2.5 72B Instruct</option>
-                      <option value="Qwen/Qwen2.5-7B-Instruct">Qwen 2.5 7B Instruct</option>
-                      <option value="microsoft/Phi-4">Phi-4 (Microsoft)</option>
-                      <option value="microsoft/phi-4-mini-instruct">Phi-4 Mini Instruct (Microsoft)</option>
-                      <option value="deepseek-ai/DeepSeek-R1-0528">DeepSeek R1 0528</option>
-                      <option value="google/gemma-2-9b-it">Gemma 2 9B IT (Google)</option>
-                      <option value="google/gemma-2-27b-it">Gemma 2 27B IT (Google)</option>
+                      <optgroup label="✅ Free · hf-inference tier">
+                        <option value="meta-llama/Llama-3.2-3B-Instruct">Llama 3.2 3B Instruct (Meta) — fastest</option>
+                        <option value="meta-llama/Llama-3.1-8B-Instruct">Llama 3.1 8B Instruct (Meta)</option>
+                        <option value="mistralai/Mistral-7B-Instruct-v0.3">Mistral 7B Instruct v0.3</option>
+                        <option value="HuggingFaceH4/zephyr-7b-beta">Zephyr 7B Beta (HuggingFace)</option>
+                        <option value="google/gemma-2-9b-it">Gemma 2 9B IT (Google)</option>
+                      </optgroup>
+                      <optgroup label="⚡ Larger · may use paid providers">
+                        <option value="meta-llama/Llama-3.3-70B-Instruct">Llama 3.3 70B Instruct (Meta)</option>
+                        <option value="Qwen/Qwen2.5-72B-Instruct">Qwen 2.5 72B Instruct</option>
+                        <option value="Qwen/Qwen2.5-7B-Instruct">Qwen 2.5 7B Instruct</option>
+                        <option value="microsoft/Phi-4">Phi-4 (Microsoft)</option>
+                        <option value="deepseek-ai/DeepSeek-R1-0528">DeepSeek R1 0528</option>
+                        <option value="google/gemma-2-27b-it">Gemma 2 27B IT (Google)</option>
+                      </optgroup>
                     </select>
                   </div>
                 </div>
