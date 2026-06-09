@@ -8,6 +8,7 @@ from app.models.model import Model as DBModel
 from app.schemas.model import ModelCreate, ModelUpdate, ModelResponse, ValidateRequest
 from app.core.auth import get_current_user
 from app.services.crypto import encrypt, decrypt
+from app.core.security import validate_endpoint_url
 
 router = APIRouter()
 
@@ -137,6 +138,9 @@ async def validate_model(request: ValidateRequest, current_user: User = Depends(
         raise HTTPException(status_code=400, detail="Missing required fields for validation")
 
     provider = provider.lower()
+
+    if endpoint:
+        validate_endpoint_url(endpoint)
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:

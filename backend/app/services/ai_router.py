@@ -4,6 +4,7 @@ import asyncio
 import re
 from app.services.crypto import decrypt
 from app.services.cost import calculate_cost
+from app.core.security import validate_endpoint_url
 from app.services.retry import RateLimitError, with_exponential_backoff
 
 def _check_rate_limit(response_data: dict, status_code: int, provider: str):
@@ -179,6 +180,8 @@ async def _call_huggingface(model, api_key: str, system_prompt: str, user_messag
         raise Exception(f"HuggingFace inference error: {err_str}")
 
 async def call_provider(model, system_prompt: str, user_message: str) -> dict:
+    if model.endpoint:
+        validate_endpoint_url(model.endpoint)
     api_key = decrypt(model.api_key_encrypted)
     provider = model.provider.lower()
     start_time = time.time()

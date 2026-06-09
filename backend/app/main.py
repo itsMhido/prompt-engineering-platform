@@ -7,6 +7,9 @@ from app.routers import auth, datasets, evaluations, experiments, inference, mod
 
 security = HTTPBearer()
 
+
+security = HTTPBearer()
+
 app = FastAPI(
     title="Prompt Engineering Platform API", 
     version="1.0.0",
@@ -17,8 +20,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS.split(","),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])

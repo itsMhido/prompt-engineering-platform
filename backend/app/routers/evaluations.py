@@ -633,11 +633,20 @@ def get_scoring_job(job_id: str, current_user: User = Depends(get_current_user))
 
 
 @router.post("/score-batch/{job_id}/cancel")
-def cancel_scoring_job(job_id: str, current_user: User = Depends(get_current_user)):
+def cancel_scoring_job(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Cancel a running batch scoring job"""
     job = SCORING_JOBS.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+        
+    workspace = get_user_workspace(current_user, db)
+    if job.get("workspaceId") != str(workspace.id):
+        raise HTTPException(status_code=403, detail="Not authorized")
+        
     if job.get("status") == "running":
         SCORING_JOBS[job_id]["status"] = "cancelled"
     return {"ok": True, "status": SCORING_JOBS[job_id]["status"]}
