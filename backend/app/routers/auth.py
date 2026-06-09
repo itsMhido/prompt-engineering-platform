@@ -11,6 +11,33 @@ router = APIRouter()
 
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=AuthResponse)
 def register(request: RegisterRequest, db: Session = Depends(get_db)):
+    """
+    Register a new user account and create their personal workspace.
+    
+    Endpoint: POST /auth/register
+    
+    Parameters:
+        - request (RegisterRequest): Request body containing:
+            - email: User's email address (must be unique)
+            - password: Plaintext password (will be hashed)
+            - name: User's display name
+    
+    Returns:
+        Dictionary containing:
+        - "user": User object with id, email, name, role, created_at
+        - "token": JWT access token for authentication
+        - "workspace": Workspace object with id and name
+    
+    Behavior:
+        - Validates email uniqueness
+        - Hashes password using bcrypt
+        - Creates user record
+        - Automatically creates a personal workspace named "{user.name}'s Workspace"
+        - Adds user as admin member of the workspace
+        - Generates and returns JWT token
+        - Returns HTTP 201 Created status
+        - Returns 400 if email already exists
+    """
     if db.query(User).filter(User.email == request.email).first():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
     
@@ -56,6 +83,29 @@ def register(request: RegisterRequest, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=AuthResponse)
 def login(request: LoginRequest, db: Session = Depends(get_db)):
+    """
+    Authenticate user credentials and return access token.
+    
+    Endpoint: POST /auth/login
+    
+    Parameters:
+        - request (LoginRequest): Request body containing:
+            - email: User's email address
+            - password: Plaintext password
+    
+    Returns:
+        Dictionary containing:
+        - "user": User object with id, email, name, role, created_at
+        - "token": JWT access token for authentication
+        - "workspace": Workspace object with id and name
+    
+    Behavior:
+        - Verifies email exists and password matches hash
+        - Retrieves user's workspace membership
+        - Generates and returns JWT token
+        - Returns 401 if credentials are invalid
+        - Returns 400 if user has no workspace (shouldn't happen in normal flow)
+    """
     user = db.query(User).filter(User.email == request.email).first()
     if not user or not verify_password(request.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
@@ -82,6 +132,25 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
 
 @router.get("/me", response_model=MeResponse)
 def me(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """
+    Get current authenticated user's profile and workspace information.
+    
+    Endpoint: GET /auth/me
+    
+    Parameters:
+        - current_user: Authenticated user from JWT token
+    
+    Returns:
+        Dictionary containing:
+        - "user": User object with id, email, name, role, created_at
+        - "workspace": Workspace object with id and name
+    
+    Behavior:
+        - Requires valid JWT token in Authorization header
+        - Retrieves user's workspace membership
+        - Returns 400 if user has no workspace (shouldn't happen in normal flow)
+        - Returns 401 if token is invalid or missing
+    """
     workspace_member = db.query(WorkspaceMember).filter(WorkspaceMember.user_id == current_user.id).first()
     if not workspace_member:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User has no workspace")

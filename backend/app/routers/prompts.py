@@ -20,6 +20,28 @@ def list_prompts(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """
+    List all prompts for the current user's workspace.
+    
+    Endpoint: GET /prompts
+    
+    Parameters:
+        - search (optional): Search term to filter prompts by name, description, or tags (case-insensitive)
+        - tag (optional): Filter prompts that have a specific tag
+        - current_user: Authenticated user making the request
+        - db: Database session
+    
+    Returns:
+        Dictionary with "prompts" key containing list of prompt objects.
+        Each prompt includes: id, name, description, tags, versionCount, experimentCount, createdAt, updatedAt
+    
+    Behavior:
+        - Retrieves all prompts associated with the current user's workspace
+        - Applies search filter across name, description, and tags if provided
+        - Applies tag filter if specified
+        - Orders results by most recently updated first
+        - Counts associated versions and experiments for each prompt
+    """
     workspace = get_user_workspace(current_user, db)
     query = db.query(Prompt).filter(Prompt.workspace_id == workspace.id)
     
@@ -58,6 +80,30 @@ def create_prompt(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """
+    Create a new prompt in the current user's workspace.
+    
+    Endpoint: POST /prompts
+    
+    Parameters:
+        - request (PromptCreate): Request body containing:
+            - name: Name of the prompt
+            - description: Description of the prompt
+            - tags: List of tags for categorization
+        - current_user: Authenticated user making the request
+        - db: Database session
+    
+    Returns:
+        Dictionary containing:
+        - "prompt": The newly created prompt object with id, name, description, tags, etc.
+        - "initialVersion": The automatically created initial version (v1) with empty system_prompt and user_template
+    
+    Behavior:
+        - Creates a new Prompt record in the workspace
+        - Automatically creates an initial PromptVersion (v1) with empty content
+        - Sets created_by to the current user
+        - Returns HTTP 201 Created status
+    """
     workspace = get_user_workspace(current_user, db)
     db_prompt = Prompt(
         workspace_id=workspace.id,
@@ -113,6 +159,27 @@ def update_prompt(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """
+    Update an existing prompt's metadata.
+    
+    Endpoint: PATCH /prompts/{prompt_id}
+    
+    Parameters:
+        - prompt_id: ID of the prompt to update
+        - request (PromptUpdate): Request body with fields to update (name, description, tags)
+        - current_user: Authenticated user making the request
+        - db: Database session
+    
+    Returns:
+        Dictionary with "prompt" key containing the updated prompt object
+    
+    Behavior:
+        - Only allows updating prompts in the current user's workspace
+        - Updates only the fields provided in the request (PATCH semantics)
+        - Updates the updated_at timestamp to current time
+        - Returns 404 if prompt not found or not in user's workspace
+        - Recalculates version count and experiment count
+    """
     workspace = get_user_workspace(current_user, db)
     db_prompt = db.query(Prompt).filter(Prompt.id == prompt_id, Prompt.workspace_id == workspace.id).first()
     if not db_prompt:
@@ -151,6 +218,31 @@ def duplicate_prompt(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """
+    Duplicate an existing prompt with all its versions.
+    
+    Endpoint: POST /prompts/{prompt_id}/duplicate
+    
+    Parameters:
+        - prompt_id: ID of the prompt to duplicate
+        - current_user: Authenticated user making the request
+        - db: Database session
+    
+    Returns:
+        Dictionary containing:
+        - "prompt": The newly duplicated prompt (with " (copy)" appended to name)
+        - "versions": List of all duplicated versions
+    
+    Behavior:
+        - Creates a new Prompt with name appended with " (copy)"
+        - Copies all existing versions from the original prompt
+        - Preserves version numbers and content exactly
+        - Returns HTTP 201 Created status
+        - Returns 404 if source prompt not found or not in user's workspace
+    """
+    """
+
+    """
     workspace = get_user_workspace(current_user, db)
     orig_prompt = db.query(Prompt).filter(Prompt.id == prompt_id, Prompt.workspace_id == workspace.id).first()
     if not orig_prompt:
@@ -214,6 +306,26 @@ def delete_prompt(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """
+    Delete a prompt and update associated experiments.
+    
+    Endpoint: DELETE /prompts/{prompt_id}
+    
+    Parameters:
+        - prompt_id: ID of the prompt to delete
+        - current_user: Authenticated user making the request
+        - db: Database session
+    
+    Returns:
+        Dictionary with "ok": true on successful deletion
+    
+    Behavior:
+        - Only allows deletion of prompts in the current user's workspace
+        - Finds all experiments linked to this prompt
+        - Nullifies prompt_id and prompt_version_id references in those experiments
+        - Deletes the prompt record
+        - Returns 404 if prompt not found or not in user's workspace
+    """
     workspace = get_user_workspace(current_user, db)
     db_prompt = db.query(Prompt).filter(Prompt.id == prompt_id, Prompt.workspace_id == workspace.id).first()
     if not db_prompt:
@@ -236,6 +348,26 @@ def list_prompt_versions(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """
+    List all versions of a specific prompt.
+    
+    Endpoint: GET /prompts/{prompt_id}/versions
+    
+    Parameters:
+        - prompt_id: ID of the prompt to retrieve versions for
+        - sort (optional): Sorting order - "version_asc" for ascending or "version_desc" (default) for descending
+        - current_user: Authenticated user making the request
+        - db: Database session
+    
+    Returns:
+        Dictionary with "versions" key containing list of PromptVersion objects.
+        Each version includes: id, promptId, versionNumber, versionDisplay, systemPrompt, userTemplate, commitMessage, createdAt
+    
+    Behavior:
+        - Retrieves all versions for the specified prompt
+        - Applies sorting based on version number
+        - Returns 404 if prompt not found or not in user's workspace
+    """
     workspace = get_user_workspace(current_user, db)
     db_prompt = db.query(Prompt).filter(Prompt.id == prompt_id, Prompt.workspace_id == workspace.id).first()
     if not db_prompt:
@@ -269,6 +401,29 @@ def create_prompt_version(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """
+    Create a new version of an existing prompt.
+    
+    Endpoint: POST /prompts/{prompt_id}/versions
+    
+    Parameters:
+        - prompt_id: ID of the prompt to create a version for
+        - request (VersionCreate): Request body containing:
+            - systemPrompt: System prompt content
+            - userTemplate: User template content
+            - commitMessage: Description of changes in this version
+        - current_user: Authenticated user making the request
+        - db: Database session
+    
+    Returns:
+        Dictionary with "version" key containing the newly created PromptVersion object
+    
+    Behavior:
+        - Increments version number automatically (max existing version + 1)
+        - Updates the prompt's updated_at timestamp
+        - Returns HTTP 201 Created status
+        - Returns 404 if prompt not found or not in user's workspace
+    """
     workspace = get_user_workspace(current_user, db)
     db_prompt = db.query(Prompt).filter(Prompt.id == prompt_id, Prompt.workspace_id == workspace.id).first()
     if not db_prompt:
@@ -313,6 +468,24 @@ def get_prompt_version(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """
+    Retrieve a specific version of a prompt.
+    
+    Endpoint: GET /prompts/{prompt_id}/versions/{version_id}
+    
+    Parameters:
+        - prompt_id: ID of the prompt
+        - version_id: ID of the specific version to retrieve
+        - current_user: Authenticated user making the request
+        - db: Database session
+    
+    Returns:
+        Dictionary with "version" key containing the PromptVersion object
+    
+    Behavior:
+        - Returns 404 if prompt not found or not in user's workspace
+        - Returns 404 if version not found or doesn't belong to the specified prompt
+    """
     workspace = get_user_workspace(current_user, db)
     db_prompt = db.query(Prompt).filter(Prompt.id == prompt_id, Prompt.workspace_id == workspace.id).first()
     if not db_prompt:
