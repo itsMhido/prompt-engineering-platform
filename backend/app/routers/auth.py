@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.schemas.auth import RegisterRequest, LoginRequest, AuthResponse, MeResponse, UpdateMeRequest
@@ -6,19 +6,24 @@ from app.models.user import User
 from app.models.workspace import Workspace, WorkspaceMember
 from app.core.auth import hash_password, verify_password, create_access_token, get_current_user
 from app.models.evaluation_metric import EvaluationMetric
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter()
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=AuthResponse)
-def register(request: RegisterRequest, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.email == request.email).first():
+@limiter.limit("5/hour")
+def register(request: Request, body: RegisterRequest, db: Session = Depends(get_db)):
+    if db.query(User).filter(User.email == body.email).first():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email already registered")
     
     user = User(
-        email=request.email,
-        password_hash=hash_password(request.password),
-        name=request.name
+        email=body.email,
+        password_hash=hash_password(body.password),
+        name=body.name
     )
     db.add(user)
     db.flush()
@@ -86,9 +91,10 @@ def register(request: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=AuthResponse)
-def login(request: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == request.email).first()
-    if not user or not verify_password(request.password, user.password_hash):
+@limiter.limit("10/minute")
+def login(request: Request, body: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == body.email).first()
+    if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
     
     workspace_member = db.query(WorkspaceMember).filter(WorkspaceMember.user_id == user.id).first()
@@ -112,7 +118,8 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/me", response_model=MeResponse)
-def me(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+def me(request: Request, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     workspace_member = db.query(WorkspaceMember).filter(WorkspaceMember.user_id == current_user.id).first()
     if not workspace_member:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="User has no workspace")

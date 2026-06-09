@@ -13,3 +13,4 @@ pydantic[email]
 pydantic-settings
 python-multipart
 bcrypt==4.0.1
+slowapi

@@ -50,7 +50,11 @@ export default function AuthPage({ onAuthSuccess, initialTab = 'login' }) {
       });
       onAuthSuccess();
     } catch (err) {
-      setError(err.message || 'Invalid email or password');
+      if (err.message?.includes('429') || err.message?.toLowerCase().includes('too many')) {
+        setError('Too many login attempts. Please wait a minute and try again.');
+      } else {
+        setError(err.message || 'Invalid email or password');
+      }
     } finally {
       setIsLoading(false);
     }

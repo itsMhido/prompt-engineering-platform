@@ -102,14 +102,22 @@ export function clearSession() {
 }
 
 export async function login({ email, password }) {
-  return fetchJson('/api/auth/login', {
-    method: 'POST',
-    body: {
-      email,
-      password
-    },
-    skipAuth: true
-  }).then(setSessionFromAuthResponse);
+  try {
+    const response = await fetchJson('/api/auth/login', {
+      method: 'POST',
+      body: {
+        email,
+        password
+      },
+      skipAuth: true
+    });
+    return setSessionFromAuthResponse(response);
+  } catch (error) {
+    if (error.status === 429) {
+      throw new Error('Too many login attempts. Please wait a minute and try again.');
+    }
+    throw error;
+  }
 }
 
 export async function register({ name, email, password }) {
