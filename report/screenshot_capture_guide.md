@@ -123,28 +123,7 @@ Use these exact filenames:
 | `report/figures/screenshots/11_workspace_settings.png` | Workspace settings | Open Workspace Settings, capture profile, workspace name, and metrics section. |
 | `report/figures/screenshots/12_demo_batch_comparison_two_models.png` | Final demo comparison | Select two named batches from different models or versions and capture winner indicators. |
 
-## 6. Metrics to Record in the Report
-
-The report includes a table for real measurements. During the demo, record:
-
-- Model name.
-- Prompt version.
-- Latency in milliseconds.
-- Input tokens.
-- Output tokens.
-- Total tokens.
-- Cost estimate.
-- Overall score.
-- Per-metric scores: Relevance, Correctness, Fluency, Toxicity, and any custom metric.
-
-Where to find them:
-
-- Prompt Studio output preview shows latency/tokens/cost after a run.
-- Experiments page shows logged runs, status, score, latency, tokens, and details.
-- Evaluations overview shows aggregate statistics.
-- Evaluations comparison shows batch-level averages and per-row winners.
-
-## 7. LaTeX Compilation
+## 6. LaTeX Compilation
 
 From `report/`, compile with:
 
@@ -161,4 +140,3 @@ Before submission, fill these placeholders in `technical_project_report.tex`:
 - `\StudentId`
 - `\SupervisorName`
 - `\GitHubUrl`
-- Demo metrics table values

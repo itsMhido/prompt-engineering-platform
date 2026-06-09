@@ -105,7 +105,7 @@
 
 The implemented system combines a React and Vite single-page application, a FastAPI backend, SQLAlchemy models, Alembic migrations, a Supabase PostgreSQL database, and a Railway deployment target. It supports multiple artificial intelligence providers, including Anthropic, OpenAI, Google Gemini, Groq, Mistral, HuggingFace, and custom OpenAI-compatible endpoints. API keys are encrypted at rest using Fernet and are only decrypted server-side when an inference request is executed.
 
-The main outcomes are a secure backend inference layer, a prompt library with per-prompt version histories, dataset-driven batch evaluation, AI-assisted scoring with custom metrics, experiment logging, and comparison views for batch runs. The project also produced a realistic set of engineering lessons: network constraints around managed databases, deployment cold starts, prompt editor cursor synchronization, rate limit handling, JSON parsing reliability for evaluator models, and the importance of modular frontend structure.
+The main outcomes are a secure backend inference layer, a prompt library with per-prompt version histories, dataset-driven batch evaluation, AI-assisted scoring with custom metrics, experiment logging, and comparison views for batch runs.
 
 \tableofcontents
 \listoffigures
@@ -145,10 +145,10 @@ The project objectives were:
 \end{enumerate}
 
 \section{Scope}
-The implemented scope includes authentication, workspace creation, model registry, prompt library, prompt studio, datasets, experiments, evaluations, custom metrics, batch runs, batch scoring, and workspace settings. The project does not yet include multi-user invitation workflows, a deployed public frontend, refresh tokens, persistent background-job storage, or complete DevOps automation.
+The implemented scope includes authentication, workspace creation, model registry, prompt library, prompt studio, datasets, experiments, evaluations, custom metrics, batch runs, batch scoring, and workspace settings. The project does not include refresh tokens, persistent background-job storage, local model hosting from the cloud backend, or complete DevOps automation.
 
 \section{Report Structure}
-This report presents the state of the art, requirements, architecture, database design, backend implementation, frontend implementation, evaluation system, security, testing approach, challenges, results, future work, conclusion, references, and appendices.
+This report presents the state of the art, requirements, architecture, database design, backend implementation, frontend implementation, evaluation system, security, testing approach, results, future work, conclusion, references, and appendices.
 
 \chapter{State of the Art and Literature Review}
 
@@ -173,7 +173,6 @@ Custom metrics & Yes & Yes & Yes & Yes & Yes \\
 Multi-provider registry & Yes & Yes & Yes & Yes & Yes \\
 Encrypted user API keys & Platform-dependent & Platform-dependent & Platform-dependent & Platform-dependent & Implemented with Fernet \\
 Open-source/self-hostable & No, managed plus options & Enterprise options & Self-hosted option & Yes & Codebase-owned project \\
-Frontend deployment & Yes & Yes & Yes & Yes & Not yet \\
 Local educational implementation & No & No & No & No & Yes \\
 \bottomrule
 \end{longtable}
@@ -274,7 +273,7 @@ The application follows a three-tier architecture. The frontend is a React singl
 \section{Deployment Architecture}
 \ReportFigure{figures/diagrams/diagram_02_deployment.png}{Deployment architecture from local development to Railway and Supabase.}{fig:deployment}{Render Diagram 2 from \path{project_diagrams.md}.}
 
-Railway deploys the backend from the \path{backend/} directory using the Dockerfile. Supabase hosts the PostgreSQL database. The frontend currently runs locally through Vite on port 5173 and targets the Railway backend through \texttt{VITE\_API\_BASE\_URL} or the production URL fallback.
+Railway deploys the backend from the \path{backend/} directory using the Dockerfile. Supabase hosts the PostgreSQL database. During development, the React application runs through Vite on port 5173 and targets the Railway backend through \texttt{VITE\_API\_BASE\_URL} or the production URL fallback.
 
 \section{Data Flow}
 \ReportFigure{figures/diagrams/diagram_14_data_flow_dfd.png}{Level 1 data flow diagram.}{fig:data-flow}{Render Diagram 14 from \path{project_diagrams.md}.}
@@ -324,7 +323,7 @@ Table & Purpose & Key design details \\
 \endhead
 \texttt{users} & Stores registered users & Unique email, bcrypt password hash, display name, role \\
 \texttt{workspaces} & Groups user-owned resources & Owner foreign key, created automatically at registration \\
-\texttt{workspace\_members} & Future collaboration membership & Unique workspace-user pair, role field \\
+\texttt{workspace\_members} & Stores workspace membership records & Unique workspace-user pair, role field \\
 \texttt{models} & Stores provider model configuration & Encrypted API key, provider, endpoint, model ID, parameters \\
 \texttt{prompts} & Stores prompt metadata & Name, description, tags, creator, workspace ownership \\
 \texttt{prompt\_versions} & Stores durable prompt content & Per-prompt version number, system prompt, user template, commit message \\
@@ -602,53 +601,8 @@ The main demo scenario is a customer support assistant:
   \item Compare two batches produced by different models or prompt versions.
 \end{enumerate}
 
-\section{Performance Observations}
-Actual measured values should be captured during the final demo because they depend on provider, network, Railway cold-start state, and token usage. Table \ref{tab:demo-metrics} is prepared for insertion of final measurements.
-
-\begin{longtable}{p{0.20\textwidth}p{0.18\textwidth}p{0.15\textwidth}p{0.15\textwidth}p{0.16\textwidth}}
-\caption{Demo performance measurements to capture before submission.}
-\label{tab:demo-metrics}\\
-\toprule
-Scenario & Model & Latency ms & Tokens & Cost estimate \\
-\midrule
-\endfirsthead
-\toprule
-Scenario & Model & Latency ms & Tokens & Cost estimate \\
-\midrule
-\endhead
-Single support prompt & To be captured & To be captured & To be captured & To be captured \\
-Batch row 1 & To be captured & To be captured & To be captured & To be captured \\
-AI scoring request & To be captured & To be captured & To be captured & To be captured \\
-\bottomrule
-\end{longtable}
-
 \section{Known Issues}
-Known limitations include no deployed frontend, no refresh-token revocation mechanism, in-memory background job state, no invite UI for workspace collaboration, no local model support from Railway, and no persistent queue for long-running scoring jobs.
-
-\chapter{Challenges and Solutions}
-
-\begin{longtable}{p{0.24\textwidth}p{0.25\textwidth}p{0.34\textwidth}}
-\caption{Major project challenges and solutions.}\\
-\toprule
-Challenge & Root cause & Solution \\
-\midrule
-\endfirsthead
-\toprule
-Challenge & Root cause & Solution \\
-\midrule
-\endhead
-Supabase blocked on school network & Outbound port 5432 restrictions & Use mobile hotspot or Supabase SQL editor for migrations \\
-Railway cold start and 499 errors & Free-tier backend sleeps after inactivity & Ping health endpoint before loading workspace data \\
-Prompt editor cursor desync & Highlight spans changed text layout & Use textarea plus zero-cost mirrored highlight layer \\
-Dataset cell edit blocking & Shared save state blocked independent edits & Use per-cell timers and flush pending edits before structural operations \\
-Malformed scoring JSON & LLM responses include prose or invalid JSON & Ask for reasoning then final JSON and parse from response end \\
-Provider rate limits & Free-tier token limits and repeated calls & Consolidate metrics into one scorer request and retry with backoff \\
-Google endpoint bug & Literal placeholder was not interpolated & Replace placeholder with concrete model ID before request \\
-\texttt{costEstimate} crash & Mixed string and numeric cost values & Store cost as float and format only in frontend \\
-Hooks order black screen & React hook called after conditional return & Move all hooks before conditional rendering \\
-Large frontend file edits & Single file exceeded practical edit context & Refactor into pages, components, and utilities \\
-\bottomrule
-\end{longtable}
+Known limitations include no refresh-token revocation mechanism, in-memory background job state, no local model support from the Railway-hosted backend, and no persistent queue for long-running scoring jobs.
 
 \chapter{Results and Demo}
 
@@ -685,23 +639,20 @@ The demo should show the customer support assistant from prompt creation to batc
 \chapter{Future Work}
 
 \begin{itemize}
-  \item Workspace collaboration with invitations, roles, and workspace switching.
   \item Local model support through Docker Compose self-hosting or secure tunneling.
-  \item DevOps pipeline using GitHub Actions, Kubernetes, and Argo CD.
   \item Per-row scoring from the Batch Eval table.
   \item Scoring prompt transparency so users can inspect the evaluator prompt.
   \item HuggingFace model browsing and discovery.
   \item Persistent background jobs using Redis Queue, Celery, or a database-backed job table.
   \item Refresh tokens and token revocation.
   \item Key rotation through a managed KMS or vault.
-  \item Frontend deployment to Vercel, Netlify, or Railway static hosting.
 \end{itemize}
 
 \chapter{Conclusion}
 
 \ProjectName{} achieved its main objectives: it provides a complete prompt lifecycle from model registration and prompt versioning to dataset-driven experiments, AI scoring, and batch comparison. The backend centralizes sensitive provider calls, encrypts API keys, applies authentication, validates provider endpoints, and persists reproducible experiment snapshots. The frontend provides a coherent workspace for practical prompt engineering workflows.
 
-The project also demonstrates the real complexity of production-facing LLM tooling. Reliable prompt platforms must handle security, provider differences, rate limits, malformed model output, latency, cost, reproducibility, and user experience. The result is a strong full-stack foundation that can be extended into a collaborative and deployable prompt engineering product.
+The project also demonstrates the real complexity of production-facing LLM tooling. Reliable prompt platforms must handle security, provider differences, rate limits, malformed model output, latency, cost, reproducibility, and user experience. The result is a strong full-stack foundation for structured prompt engineering and evaluation.
 
 \chapter{References}
 
