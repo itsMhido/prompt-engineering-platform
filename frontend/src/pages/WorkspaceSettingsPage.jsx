@@ -3,6 +3,8 @@ import { CheckCircle2 } from 'lucide-react';
 import { updateCurrentUser, updateWorkspace } from '../utils/api';
 import * as api from '../utils/api';
 import { getUser, getWorkspace } from '../utils/auth';
+import ConfirmModal from '../components/ConfirmModal';
+import AlertModal from '../components/AlertModal';
 
 export default function WorkspaceSettingsPage({ session, onLogout }) {
   const user = session?.user || getUser();
@@ -24,6 +26,8 @@ export default function WorkspaceSettingsPage({ session, onLogout }) {
   const [metrics, setMetrics] = useState([]);
   const [isAddingMetric, setIsAddingMetric] = useState(false);
   const [newMetric, setNewMetric] = useState({ name: '', description: '', isInverse: false, isDefault: true });
+  const [metricToDelete, setMetricToDelete] = useState(null);
+  const [alertState, setAlertState] = useState({ isOpen: false, title: '', message: '' });
 
   useEffect(() => {
     api.getMetrics().then(r => setMetrics(r.metrics)).catch(console.error);
@@ -34,23 +38,25 @@ export default function WorkspaceSettingsPage({ session, onLogout }) {
       const updated = await api.updateMetric(metric.id, { isDefault: !metric.isDefault });
       setMetrics(prev => prev.map(m => m.id === metric.id ? updated.metric : m));
     } catch (err) {
-      alert('Failed to update metric');
+      setAlertState({ isOpen: true, title: 'Error', message: 'Failed to update metric' });
     }
   };
 
-  const handleDeleteMetric = async (id) => {
-    if (!window.confirm('Delete this metric?')) return;
+  const handleDeleteMetric = async () => {
+    if (!metricToDelete) return;
     try {
-      await api.deleteMetric(id);
-      setMetrics(prev => prev.filter(m => m.id !== id));
+      await api.deleteMetric(metricToDelete.id);
+      setMetrics(prev => prev.filter(m => m.id !== metricToDelete.id));
     } catch (err) {
-      alert(err.message || 'Failed to delete metric');
+      setAlertState({ isOpen: true, title: 'Error', message: err.message || 'Failed to delete metric' });
+    } finally {
+      setMetricToDelete(null);
     }
   };
 
   const handleAddMetric = async () => {
     if (!newMetric.name || !newMetric.description) {
-      alert('Name and description are required');
+      setAlertState({ isOpen: true, title: 'Error', message: 'Name and description are required' });
       return;
     }
     try {
@@ -59,7 +65,7 @@ export default function WorkspaceSettingsPage({ session, onLogout }) {
       setIsAddingMetric(false);
       setNewMetric({ name: '', description: '', isInverse: false, isDefault: true });
     } catch (err) {
-      alert(err.message || 'Failed to create metric');
+      setAlertState({ isOpen: true, title: 'Error', message: err.message || 'Failed to create metric' });
     }
   };
 
@@ -258,7 +264,7 @@ export default function WorkspaceSettingsPage({ session, onLogout }) {
                     {metric.isDefault ? '★ Default' : '☆ Default'}
                   </button>
                   <button
-                    onClick={() => handleDeleteMetric(metric.id)}
+                    onClick={() => setMetricToDelete(metric)}
                     style={{ fontSize: 11, padding: '3px 8px', border: '1px solid #3a2020',
                             borderRadius: 4, background: 'transparent',
                             color: '#e05555', cursor: 'pointer' }}
@@ -376,6 +382,22 @@ export default function WorkspaceSettingsPage({ session, onLogout }) {
           </button>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={!!metricToDelete}
+        title="Delete Metric"
+        message={`Are you sure you want to delete the metric "${metricToDelete?.name}"?`}
+        confirmText="Delete"
+        onConfirm={handleDeleteMetric}
+        onCancel={() => setMetricToDelete(null)}
+      />
+
+      <AlertModal
+        isOpen={alertState.isOpen}
+        title={alertState.title}
+        message={alertState.message}
+        onClose={() => setAlertState({ isOpen: false, title: '', message: '' })}
+      />
     </div>
   );
 }

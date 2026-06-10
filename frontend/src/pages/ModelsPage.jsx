@@ -10,6 +10,7 @@ import {
   removeModel,
   updateModel
 } from '../utils/api';
+import ConfirmModal from '../components/ConfirmModal';
 
 const EMPTY_FORM = {
   name: '',
@@ -34,6 +35,7 @@ export default function ModelsPage({ onModelsChanged }) {
   const [formData, setFormData] = useState(EMPTY_FORM);
   const [showApiKey, setShowApiKey] = useState(false);
   const [error, setError] = useState('');
+  const [modelToDelete, setModelToDelete] = useState(null);
   const mouseDownTarget = useRef(null);
 
   useEffect(() => {
@@ -166,11 +168,9 @@ export default function ModelsPage({ onModelsChanged }) {
     setIsModalOpen(true);
   };
 
-  const handleDelete = async (id) => {
-    if (deletingId) return;
-    if (!confirm('Are you sure you want to remove this model?')) {
-      return;
-    }
+  const handleDelete = async () => {
+    if (!modelToDelete || deletingId) return;
+    const id = modelToDelete.id;
 
     setDeletingId(id);
     try {
@@ -180,6 +180,7 @@ export default function ModelsPage({ onModelsChanged }) {
       setError(err.message || 'Failed to delete model.');
     } finally {
       setDeletingId(null);
+      setModelToDelete(null);
     }
   };
 
@@ -252,7 +253,7 @@ export default function ModelsPage({ onModelsChanged }) {
                   <button onClick={() => handleEdit(model)} className="rounded p-1.5 text-text-muted transition-colors hover:bg-blue-400/10 hover:text-blue-400"><Edit2 size={14} /></button>
                   <button onClick={() => handleDuplicate(model)} className="rounded p-1.5 text-text-muted transition-colors hover:bg-yellow-400/10 hover:text-yellow-400"><Copy size={14} /></button>
                   <button 
-                    onClick={() => handleDelete(model.id)} 
+                    onClick={() => setModelToDelete(model)} 
                     disabled={deletingId === model.id}
                     className="rounded p-1.5 text-text-muted transition-colors hover:bg-red-400/10 hover:text-red-400"
                     style={{ opacity: deletingId === model.id ? 0.6 : 1, cursor: deletingId === model.id ? 'not-allowed' : 'pointer' }}
@@ -444,6 +445,15 @@ export default function ModelsPage({ onModelsChanged }) {
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        isOpen={!!modelToDelete}
+        title="Delete Model"
+        message={`Are you sure you want to remove the model "${modelToDelete?.name}"?`}
+        confirmText="Delete"
+        onConfirm={handleDelete}
+        onCancel={() => setModelToDelete(null)}
+      />
     </div>
   );
 }
