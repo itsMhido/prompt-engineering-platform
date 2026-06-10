@@ -13,6 +13,11 @@ dist-ssr
 *.local
 lab-devops.txt
 project-report.txt
+report
+IMPLEMENTATION_GUIDE.md
+project_diagrams.md
+prompt_env_complete_knowledge.md
+plan.md
 
 # Editor directories and files
 .vscode/*
